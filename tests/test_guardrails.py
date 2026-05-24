@@ -8,7 +8,10 @@ from app.main import app
 from app.pii_scrubber import scrub
 from app.injection_detector import detect
 from app.output_filter import filter_output
+from app.database import engine
+from app.models import Base
 
+Base.metadata.create_all(bind=engine)
 client = TestClient(app)
 
 # ── PII scrubber unit tests ────────────────────────────────

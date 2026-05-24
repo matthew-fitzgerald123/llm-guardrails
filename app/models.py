@@ -1,6 +1,6 @@
 from __future__ import annotations
 from sqlalchemy import Column, String, DateTime, JSON, Integer, Text, Boolean, Float
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from datetime import datetime
 
 Base = declarative_base()

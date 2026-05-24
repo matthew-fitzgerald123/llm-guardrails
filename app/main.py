@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -15,12 +16,16 @@ from app.output_filter import filter_output
 from app.rate_limiter import rate_limiter
 
 load_dotenv()
-Base.metadata.create_all(bind=engine)
 
 UPSTREAM_URL = os.getenv("UPSTREAM_URL", "http://localhost:8083")
 MAX_INPUT_TOKENS = int(os.getenv("MAX_INPUT_TOKENS", 2048))
 
-app = FastAPI(title="LLM Guardrails", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    yield
+
+app = FastAPI(title="LLM Guardrails", version="1.0.0", lifespan=lifespan)
 
 # ── Proxy endpoint ─────────────────────────────────────────
 
