@@ -11,7 +11,7 @@ class DetectionResult:
     severity: str
     semantic_score: float = 0.0
 
-# Injection patterns — ordered from high to low severity
+# Injection patterns, ordered from high to low severity
 INJECTION_PATTERNS = [
     {
         "name": "ignore_instructions",
@@ -75,13 +75,13 @@ def detect(text: str) -> DetectionResult:
             matched.append(p["name"])
             total_weight += p["weight"]
 
-    # Semantic second layer — catches paraphrased injections that evade regex
+    # Semantic second layer: catches paraphrased injections that evade regex
     sem = semantic_check(text)
     if sem.available and sem.is_suspicious and "semantic_similarity" not in matched:
         matched.append("semantic_similarity")
         total_weight += 0.8
 
-    # Normalise confidence — cap at 1.0
+    # Normalise confidence, cap at 1.0
     confidence = min(total_weight, 1.0)
 
     if confidence >= BLOCK_THRESHOLD:

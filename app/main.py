@@ -48,7 +48,7 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     if req.nonce and replay_protector.is_replay(req.nonce):
         _log_blocked(db, request_id, req.client_id, req.query,
                      "replay_detected", [])
-        raise HTTPException(409, "Duplicate request — nonce already seen")
+        raise HTTPException(409, "Duplicate request: nonce already seen")
 
     # ── 2. Rate limiting ──────────────────────────────────
     rl = rate_limiter.check(req.client_id, tier=req.tier)
@@ -86,7 +86,7 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
         _log_blocked(db, request_id, req.client_id, req.query,
                      "prompt_injection_blocked", flags)
         raise HTTPException(400, {
-            "error":    "Request blocked — potential prompt injection detected",
+            "error":    "Request blocked: potential prompt injection detected",
             "patterns": injection.matched_patterns,
         })
 

@@ -8,7 +8,7 @@ class ScrubResult:
     redacted: str
     entities_found: list[dict]
 
-# Patterns ordered by specificity — more specific first
+# Patterns ordered by specificity, more specific first
 PII_PATTERNS = [
     {
         "name": "credit_card",
@@ -64,7 +64,7 @@ def scrub(text: str) -> ScrubResult:
                 found.append({
                     "type":     p["name"],
                     "severity": p["severity"],
-                    "value":    m[:4] + "***",  # partial for audit — not full value
+                    "value":    m[:4] + "***",  # partial for audit, not full value
                 })
             redacted = re.sub(
                 p["pattern"],
