@@ -162,6 +162,7 @@ def check_injection(req: CheckReq):
         "confidence":        result.confidence,
         "matched_patterns":  result.matched_patterns,
         "severity":          result.severity,
+        "semantic_score":    result.semantic_score,
     }
 
 @app.post("/check/pii", tags=["checks"])

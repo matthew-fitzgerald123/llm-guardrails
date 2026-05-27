@@ -8,6 +8,7 @@ from app.main import app
 from app.pii_scrubber import scrub
 from app.injection_detector import detect
 from app.output_filter import filter_output
+from app.semantic_detector import semantic_check
 from app.database import engine
 from app.models import Base
 
@@ -70,6 +71,31 @@ def test_detect_clean_query():
 def test_detect_clean_ml_query():
     r = detect("Explain how gradient descent works")
     assert r.is_injection is False
+
+
+def test_detect_result_has_semantic_score():
+    r = detect("What is machine learning?")
+    assert hasattr(r, "semantic_score")
+    assert isinstance(r.semantic_score, float)
+
+
+def test_semantic_check_returns_result():
+    r = semantic_check("What is the capital of France?")
+    assert hasattr(r, "score")
+    assert hasattr(r, "is_suspicious")
+    assert hasattr(r, "available")
+    assert isinstance(r.score, float)
+
+
+def test_semantic_check_clean_query_not_suspicious():
+    r = semantic_check("Explain how transformers work in NLP")
+    assert r.is_suspicious is False
+
+
+def test_check_injection_endpoint_has_semantic_score():
+    r = client.post("/check/injection", json={"text": "What is supervised learning?"})
+    assert r.status_code == 200
+    assert "semantic_score" in r.json()
 
 # ── Output filter unit tests ───────────────────────────────
 
