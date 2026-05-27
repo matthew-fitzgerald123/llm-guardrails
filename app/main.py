@@ -32,6 +32,7 @@ app = FastAPI(title="LLM Guardrails", version="1.0.0", lifespan=lifespan)
 class GuardedRequest(BaseModel):
     query: str
     client_id: str = "anonymous"
+    tier: str = "free"
     max_steps: int = 6
     bypass_cache: bool = False
 
@@ -42,7 +43,7 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     flags = []
 
     # ── 1. Rate limiting ───────────────────────────────────
-    rl = rate_limiter.check(req.client_id)
+    rl = rate_limiter.check(req.client_id, tier=req.tier)
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "rate_limit_exceeded", flags)
@@ -142,12 +143,20 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
         "flags":      flags,
         "blocked":    filter_result.blocked,
         "meta": {
-            "pii_scrubbed":      bool(scrub_result.entities_found),
-            "injection_score":   injection.confidence,
+            "pii_scrubbed":         bool(scrub_result.entities_found),
+            "injection_score":      injection.confidence,
             "rate_limit_remaining": rl.remaining,
-            "latency_ms":        latency,
+            "rate_limit_tier":      rl.tier,
+            "latency_ms":           latency,
         },
     }
+
+
+@app.get("/tiers", tags=["guardrails"])
+def list_tiers():
+    from app.rate_limiter import _TIERS, _DEFAULT_TIER, _DEFAULT_RPM
+    tiers = dict(_TIERS) if _TIERS else {"default": _DEFAULT_RPM}
+    return {"tiers": tiers, "default_tier": _DEFAULT_TIER}
 
 # ── Direct check endpoints ─────────────────────────────────
 

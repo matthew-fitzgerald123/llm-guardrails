@@ -97,6 +97,30 @@ def test_check_injection_endpoint_has_semantic_score():
     assert r.status_code == 200
     assert "semantic_score" in r.json()
 
+
+def test_tiers_endpoint():
+    r = client.get("/tiers")
+    assert r.status_code == 200
+    data = r.json()
+    assert "tiers" in data
+    assert "default_tier" in data
+
+
+def test_rate_limiter_respects_tier():
+    from app.rate_limiter import rate_limiter, _rpm_for_tier
+    assert _rpm_for_tier("free") >= 0
+    assert _rpm_for_tier("unknown_tier") >= 0
+
+
+def test_guarded_request_accepts_tier():
+    r = client.post("/guard/query", json={
+        "query": "What is 2+2?",
+        "client_id": "tier_test_client",
+        "tier": "free",
+        "max_steps": 1,
+    })
+    assert r.status_code in (200, 429, 503)
+
 # ── Output filter unit tests ───────────────────────────────
 
 def test_filter_clean_output():
