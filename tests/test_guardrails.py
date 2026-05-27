@@ -213,3 +213,20 @@ def test_audit_logs_endpoint():
     r = client.get("/audit/logs")
     assert r.status_code == 200
     assert isinstance(r.json(), list)
+
+
+def test_audit_dashboard_endpoint():
+    r = client.get("/audit/dashboard")
+    assert r.status_code == 200
+    data = r.json()
+    assert "timeline" in data
+    assert "total_requests" in data
+    assert "window_hours" in data
+
+
+def test_audit_dashboard_custom_window():
+    r = client.get("/audit/dashboard?hours=6&bucket_minutes=30")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["window_hours"] == 6
+    assert data["bucket_minutes"] == 30

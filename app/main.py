@@ -268,6 +268,51 @@ def audit_stats(db: Session = Depends(get_db)):
         "flag_breakdown": flag_types,
     }
 
+@app.get("/audit/dashboard", tags=["observability"])
+def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+
+    buckets: dict[str, dict] = defaultdict(lambda: {
+        "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
+    })
+
+    for log in logs:
+        ts = log.created_at
+        bucket_key = ts.strftime("%Y-%m-%dT%H:") + f"{(ts.minute // bucket_minutes) * bucket_minutes:02d}"
+        b = buckets[bucket_key]
+        b["total"] += 1
+        if log.blocked:
+            b["blocked"] += 1
+        if log.flags:
+            b["flagged"] += 1
+            for f in log.flags:
+                b["flag_types"][f.get("type", "unknown")] += 1
+
+    timeline = []
+    for bucket_key in sorted(buckets):
+        b = buckets[bucket_key]
+        total = b["total"]
+        timeline.append({
+            "bucket":     bucket_key,
+            "total":      total,
+            "blocked":    b["blocked"],
+            "flagged":    b["flagged"],
+            "block_rate": round(b["blocked"] / total, 4) if total else 0.0,
+            "flag_types": dict(b["flag_types"]),
+        })
+
+    return {
+        "window_hours":   hours,
+        "bucket_minutes": bucket_minutes,
+        "total_requests": len(logs),
+        "timeline":       timeline,
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "upstream": UPSTREAM_URL}
