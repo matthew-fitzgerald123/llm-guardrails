@@ -112,6 +112,39 @@ def test_rate_limiter_respects_tier():
     assert _rpm_for_tier("unknown_tier") >= 0
 
 
+def test_replay_protector_fresh_nonce():
+    from app.replay_protector import replay_protector
+    import uuid
+    nonce = str(uuid.uuid4())
+    assert replay_protector.check_and_store(nonce) is True
+
+
+def test_replay_protector_duplicate_nonce():
+    from app.replay_protector import replay_protector
+    import uuid
+    nonce = str(uuid.uuid4())
+    replay_protector.check_and_store(nonce)
+    assert replay_protector.is_replay(nonce) is True
+
+
+def test_replay_nonce_rejected_on_second_request():
+    import uuid
+    nonce = str(uuid.uuid4())
+    r1 = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "replay_test",
+        "nonce": nonce,
+        "max_steps": 1,
+    })
+    r2 = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "replay_test",
+        "nonce": nonce,
+        "max_steps": 1,
+    })
+    assert r2.status_code == 409
+
+
 def test_guarded_request_accepts_tier():
     r = client.post("/guard/query", json={
         "query": "What is 2+2?",

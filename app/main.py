@@ -14,6 +14,7 @@ from app.pii_scrubber import scrub
 from app.injection_detector import detect
 from app.output_filter import filter_output
 from app.rate_limiter import rate_limiter
+from app.replay_protector import replay_protector
 
 load_dotenv()
 
@@ -33,6 +34,7 @@ class GuardedRequest(BaseModel):
     query: str
     client_id: str = "anonymous"
     tier: str = "free"
+    nonce: str | None = None
     max_steps: int = 6
     bypass_cache: bool = False
 
@@ -42,7 +44,13 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     t_start = time.time()
     flags = []
 
-    # ── 1. Rate limiting ───────────────────────────────────
+    # ── 1. Replay protection ───────────────────────────────
+    if req.nonce and replay_protector.is_replay(req.nonce):
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     "replay_detected", [])
+        raise HTTPException(409, "Duplicate request — nonce already seen")
+
+    # ── 2. Rate limiting ──────────────────────────────────
     rl = rate_limiter.check(req.client_id, tier=req.tier)
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
