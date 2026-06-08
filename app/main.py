@@ -4,7 +4,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, Optional
 import httpx, uuid, time, os
 from dotenv import load_dotenv
 
@@ -34,7 +34,7 @@ class GuardedRequest(BaseModel):
     query: str
     client_id: str = "anonymous"
     tier: str = "free"
-    nonce: str | None = None
+    nonce: Optional[str] = None
     max_steps: int = 6
     bypass_cache: bool = False
 
