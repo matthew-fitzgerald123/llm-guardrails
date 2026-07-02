@@ -93,4 +93,5 @@ app/
 notebooks/
   demo.py                 demo: clean query, PII query, injection attempt
 tests/
+  test_guardrails.py      guard pipeline and endpoint tests
 ```
