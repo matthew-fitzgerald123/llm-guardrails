@@ -1,6 +1,6 @@
 # LLM Guardrails
 
-A security and safety proxy layer for LLM agent APIs. Sits in front of an upstream agent service and enforces rate limiting, prompt injection detection, PII scrubbing, input length caps, and output filtering before returning a response. Every request is audit logged to Postgres.
+A security and safety proxy layer for LLM agent APIs. Sits in front of an upstream agent service and enforces replay protection, rate limiting, prompt injection detection (pattern-based and semantic), PII scrubbing, input length caps, and output filtering before returning a response. Every request is audit logged to Postgres.
 
 ## Stack
 
@@ -27,6 +27,20 @@ brew services start redis
 # UPSTREAM_URL=http://localhost:8083
 ```
 
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://localhost/llm_guardrails` | Postgres connection |
+| `UPSTREAM_URL` | `http://localhost:8083` | Upstream agent API to forward guarded requests to |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection for rate limiting and replay protection |
+| `MAX_INPUT_TOKENS` | `2048` | Max word count before a request is rejected |
+| `RATE_LIMIT_RPM` | `60` | Default requests-per-minute limit |
+| `RATE_LIMIT_TIERS` | _(unset)_ | Per-tier RPM overrides |
+| `RATE_LIMIT_DEFAULT_TIER` | `free` | Tier applied when a request doesn't specify one |
+| `NONCE_TTL_SECONDS` | `300` | Replay-protection window for request nonces |
+| `SEMANTIC_INJECTION_THRESHOLD` | `0.75` | Cosine similarity threshold for semantic injection detection |
+
 ## Running
 
 ```bash
@@ -47,12 +61,13 @@ make test
 | Method | Path | Description |
 |---|---|---|
 | POST | `/guard/query` | Run request through all guards, forward to upstream |
+| GET | `/tiers` | List rate-limit tiers and their RPM limits |
 
 ### Direct Checks
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/check/injection` | Test a string for prompt injection patterns |
+| POST | `/check/injection` | Test a string for prompt injection patterns (pattern + semantic score) |
 | POST | `/check/pii` | Detect and redact PII entities |
 | POST | `/check/output` | Apply output filter to arbitrary text |
 
@@ -63,6 +78,7 @@ make test
 | GET | `/audit/logs` | Recent audit log entries |
 | GET | `/audit/flagged` | Flagged requests by type and severity |
 | GET | `/audit/stats` | Block rate, flag breakdown, avg latency |
+| GET | `/audit/dashboard` | Combined stats + recent flagged requests for a single-page view |
 | GET | `/health` | Server status + upstream URL |
 
 Interactive docs at `http://localhost:8084/docs`.
@@ -71,22 +87,25 @@ Interactive docs at `http://localhost:8084/docs`.
 
 Requests to `/guard/query` pass through these steps in order:
 
-1. **Rate limiting** -- per `client_id` via Redis; 429 on limit exceeded
-2. **Input length** -- rejects if word count exceeds `MAX_INPUT_TOKENS` (default 2048)
-3. **Prompt injection detection** -- pattern-based; blocks high-severity matches, flags lower ones
-4. **PII scrubbing** -- redacts detected entities (names, emails, SSNs, etc.) before forwarding
-5. **Upstream forward** -- cleaned query sent to agent API via httpx
-6. **Output filtering** -- scans response for disallowed content before returning
-7. **Audit log** -- full request/response record written to Postgres
+1. **Replay protection** -- if a `nonce` is provided, rejects it with a 409 if already seen within `NONCE_TTL_SECONDS`
+2. **Rate limiting** -- per `client_id` and `tier` via Redis; 429 on limit exceeded
+3. **Input length** -- rejects if word count exceeds `MAX_INPUT_TOKENS` (default 2048)
+4. **Prompt injection detection** -- pattern-based plus embedding similarity against known injection phrases; blocks high-severity matches, flags lower ones
+5. **PII scrubbing** -- redacts detected entities (names, emails, SSNs, etc.) before forwarding
+6. **Upstream forward** -- cleaned query sent to agent API via httpx
+7. **Output filtering** -- scans response for disallowed content before returning
+8. **Audit log** -- full request/response record written to Postgres
 
 ## Project Structure
 
 ```
 app/
-  injection_detector.py   pattern-based prompt injection classifier
+  injection_detector.py   pattern-based + semantic prompt injection classifier
+  semantic_detector.py    embedding similarity check against known injection phrases
   pii_scrubber.py         entity detection + redaction
   output_filter.py        response content filter
-  rate_limiter.py         Redis-backed token bucket
+  rate_limiter.py         Redis-backed token bucket, per-tier limits
+  replay_protector.py     Redis-backed nonce replay detection
   main.py                 FastAPI proxy app
   models.py               SQLAlchemy models (AuditLog, FlaggedRequest)
   database.py             engine + session
