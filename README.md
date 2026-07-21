@@ -91,7 +91,7 @@ Requests to `/guard/query` pass through these steps in order:
 2. **Rate limiting** -- per `client_id` and `tier` via Redis; 429 on limit exceeded
 3. **Input length** -- rejects if word count exceeds `MAX_INPUT_TOKENS` (default 2048)
 4. **Prompt injection detection** -- pattern-based plus embedding similarity against known injection phrases; blocks high-severity matches, flags lower ones
-5. **PII scrubbing** -- redacts detected entities (names, emails, SSNs, etc.) before forwarding
+5. **PII scrubbing** -- redacts detected entities (emails, SSNs, credit cards, IBANs, phone numbers, IP addresses, API keys, etc.) before forwarding; high-severity entities are fully masked in the audit log so no raw characters are persisted
 6. **Upstream forward** -- cleaned query sent to agent API via httpx
 7. **Output filtering** -- scans response for disallowed content before returning
 8. **Audit log** -- full request/response record written to Postgres

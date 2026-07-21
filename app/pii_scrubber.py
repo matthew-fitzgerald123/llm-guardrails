@@ -23,6 +23,15 @@ PII_PATTERNS = [
         "severity": "high",
     },
     {
+        # IBAN: 2 letter country code, 2 check digits, then 11 to 30 alphanumerics
+        # (optionally grouped in fours). Starts with letters, so it never collides
+        # with the digit-leading card/ssn/phone patterns above.
+        "name": "iban",
+        "pattern": r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Za-z0-9]{4}){2,7}(?:[ ]?[A-Za-z0-9]{1,3})?\b",
+        "replacement": "[IBAN]",
+        "severity": "high",
+    },
+    {
         "name": "email",
         "pattern": r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b",
         "replacement": "[EMAIL]",
@@ -54,6 +63,17 @@ PII_PATTERNS = [
     },
 ]
 
+def _audit_value(match: str, severity: str) -> str:
+    """Masked representation of a detected entity for the audit log.
+
+    High-severity entities (cards, SSNs, IBANs, API keys) are fully masked so no
+    raw characters ever reach the audit store; a length hint is kept for triage.
+    Lower-severity entities keep a short prefix preview to help debugging."""
+    if severity == "high":
+        return f"***({len(match)} chars)"
+    return match[:4] + "***"
+
+
 def scrub(text: str) -> ScrubResult:
     redacted = text
     found = []
@@ -64,7 +84,7 @@ def scrub(text: str) -> ScrubResult:
                 found.append({
                     "type":     p["name"],
                     "severity": p["severity"],
-                    "value":    m[:4] + "***",  # partial for audit, not full value
+                    "value":    _audit_value(m, p["severity"]),
                 })
             redacted = re.sub(
                 p["pattern"],

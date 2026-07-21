@@ -43,6 +43,36 @@ def test_scrub_clean_text():
     assert r.redacted == "What is machine learning?"
     assert r.entities_found == []
 
+def test_scrub_iban():
+    r = scrub("Wire the funds to GB29 NWBK 6016 1331 9268 19 by Friday")
+    assert "[IBAN]" in r.redacted
+    assert any(e["type"] == "iban" for e in r.entities_found)
+
+def test_scrub_iban_no_spaces():
+    r = scrub("Account DE89370400440532013000 is closed")
+    assert "[IBAN]" in r.redacted
+
+def test_high_severity_value_fully_masked_in_audit():
+    """High-severity entities must not leak any raw characters into the audit value."""
+    r = scrub("Card number: 4111 1111 1111 1111")
+    cc = next(e for e in r.entities_found if e["type"] == "credit_card")
+    assert cc["value"].startswith("***")
+    assert "4111" not in cc["value"]
+
+def test_high_severity_ssn_and_api_key_masked():
+    r = scrub("SSN 123-45-6789 and key sk-abcdefghijklmnopqrstuvwxyz123456")
+    for e in r.entities_found:
+        if e["severity"] == "high":
+            assert e["value"].startswith("***")
+            assert "123" not in e["value"]
+            assert "sk-a" not in e["value"]
+
+def test_medium_severity_value_keeps_preview():
+    r = scrub("Contact john.doe@example.com please")
+    email = next(e for e in r.entities_found if e["type"] == "email")
+    assert email["value"].endswith("***")
+    assert email["value"].startswith("john")
+
 # ── Injection detector unit tests ─────────────────────────
 
 def test_detect_ignore_instructions():
