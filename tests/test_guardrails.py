@@ -237,6 +237,24 @@ def test_filter_redacts_api_key_in_output():
     assert r.blocked is False
 
 
+def test_filter_redacts_dob_in_output():
+    r = filter_output("Patient dob: 04/15/1985 is enrolled in the program")
+    assert "[DOB]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_dob_date_of_birth_variant():
+    r = filter_output("Date of birth: 07/22/1990 recorded on file")
+    assert "[DOB]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_dob_born_variant():
+    r = filter_output("born: 03/12/1978 according to the record")
+    assert "[DOB]" in r.filtered
+    assert r.blocked is False
+
+
 def test_check_output_endpoint_redacts_credit_card():
     r = client.post("/check/output", json={
         "text": "Charged to card 4111 1111 1111 1111 successfully"
@@ -252,6 +270,15 @@ def test_check_output_endpoint_redacts_ssn():
     })
     assert r.status_code == 200
     assert "[SSN]" in r.json()["filtered"]
+
+
+def test_check_output_endpoint_redacts_dob():
+    r = client.post("/check/output", json={
+        "text": "Patient dob: 07/04/1990 is listed in the record"
+    })
+    assert r.status_code == 200
+    assert "[DOB]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
 
 # ── API endpoint tests ─────────────────────────────────────
 

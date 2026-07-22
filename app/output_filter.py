@@ -65,6 +65,11 @@ REDACT_PATTERNS = [
         "pattern": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
         "replacement": "[IP_ADDRESS]",
     },
+    {
+        "name": "date_of_birth_in_output",
+        "pattern": r"\b(?:dob|date of birth|born)[:\s]+\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b",
+        "replacement": "[DOB]",
+    },
 ]
 
 def filter_output(text: str) -> FilterResult:
