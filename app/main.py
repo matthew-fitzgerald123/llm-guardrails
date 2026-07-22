@@ -134,9 +134,9 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     log = AuditLog(
         request_id=request_id,
         client_id=req.client_id,
-        input_text=req.query[:500],
+        input_text=clean_query[:500],
         output_text=filter_result.filtered[:500],
-        input_redacted=clean_query[:500] if scrub_result.entities_found else None,
+        input_redacted=None,
         blocked=filter_result.blocked,
         block_reason=filter_result.block_reason or None,
         flags=flags,
@@ -204,13 +204,11 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [
         {
             "request_id": l.request_id,
@@ -224,13 +222,11 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(FlaggedRequest)
+    if client_id:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    flags = q.order_by(FlaggedRequest.created_at.desc()).limit(limit).all()
     return [
         {
             "request_id": f.request_id,
@@ -244,8 +240,11 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
+def audit_stats(client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
     if not logs:
         return {"message": "No requests logged yet"}
     total = len(logs)
@@ -323,7 +322,7 @@ def _log_blocked(db, request_id, client_id, query, reason, flags):
     log = AuditLog(
         request_id=request_id,
         client_id=client_id,
-        input_text=query[:500],
+        input_text=scrub(query).redacted[:500],
         blocked=True,
         block_reason=reason,
         flags=flags,
