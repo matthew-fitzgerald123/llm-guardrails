@@ -87,8 +87,8 @@ Interactive docs at `http://localhost:8084/docs`.
 
 Requests to `/guard/query` pass through these steps in order:
 
-1. **Replay protection** -- if a `nonce` is provided, rejects it with a 409 if already seen within `NONCE_TTL_SECONDS`
-2. **Rate limiting** -- per `client_id` and `tier` via Redis; 429 on limit exceeded
+1. **Rate limiting** -- per `client_id` and `tier` via Redis; 429 on limit exceeded (runs first so denied requests never consume a nonce)
+2. **Replay protection** -- if a `nonce` is provided, rejects it with a 409 if already seen within `NONCE_TTL_SECONDS`
 3. **Input length** -- rejects if word count exceeds `MAX_INPUT_TOKENS` (default 2048)
 4. **Prompt injection detection** -- pattern-based plus embedding similarity against known injection phrases; blocks high-severity matches, flags lower ones
 5. **PII scrubbing** -- redacts detected entities (emails, SSNs, credit cards, IBANs, phone numbers, IP addresses, API keys, etc.) before forwarding; high-severity entities are fully masked in the audit log so no raw characters are persisted
