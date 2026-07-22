@@ -454,6 +454,89 @@ def test_audit_dashboard_stats_consistent_with_total():
         assert abs(data["block_rate"] - round(blocked / total, 4)) < 0.0001
 
 
+# ── Rate limiter sliding window correctness ───────────────
+
+def test_rate_limiter_rejected_request_does_not_add_entry(monkeypatch):
+    """When a request is rate-limited, its timestamp must NOT be added to the
+    sliding window. If it were, each rejected request would push the reset
+    deadline further into the future, locking the client out longer than the
+    configured window."""
+    from app.rate_limiter import rate_limiter
+    import uuid
+
+    monkeypatch.setattr("app.rate_limiter._DEFAULT_RPM", 0)
+
+    client_id = f"rl_reject_{uuid.uuid4()}"
+    result = rate_limiter.check(client_id)
+
+    assert result.allowed is False
+    key = f"ratelimit:{client_id}"
+    assert rate_limiter.redis.zcard(key) == 0, (
+        "Rejected request must not add an entry to the sliding window"
+    )
+
+
+def test_rate_limiter_allows_exactly_rpm_then_rejects(monkeypatch):
+    """Rate limiter should allow exactly RPM requests and reject the rest,
+    leaving the sorted set with exactly RPM entries (no phantom entries from
+    rejected requests)."""
+    from app.rate_limiter import rate_limiter
+    import uuid
+
+    monkeypatch.setattr("app.rate_limiter._DEFAULT_RPM", 3)
+    monkeypatch.setattr("app.rate_limiter._TIERS", {})
+
+    client_id = f"rl_exact_{uuid.uuid4()}"
+
+    r1 = rate_limiter.check(client_id)
+    assert r1.allowed is True
+    assert r1.remaining == 2
+
+    r2 = rate_limiter.check(client_id)
+    assert r2.allowed is True
+    assert r2.remaining == 1
+
+    r3 = rate_limiter.check(client_id)
+    assert r3.allowed is True
+    assert r3.remaining == 0
+
+    r4 = rate_limiter.check(client_id)
+    assert r4.allowed is False
+    assert r4.remaining == 0
+
+    r5 = rate_limiter.check(client_id)
+    assert r5.allowed is False
+
+    key = f"ratelimit:{client_id}"
+    count = rate_limiter.redis.zcard(key)
+    assert count == 3, (
+        f"Sliding window should contain exactly 3 entries (one per allowed "
+        f"request), not {count}"
+    )
+
+
+def test_rate_limiter_remaining_matches_limit(monkeypatch):
+    """remaining must decrease by 1 for each allowed request and hit 0 at the
+    limit, then stay 0 for all subsequent rejected requests."""
+    from app.rate_limiter import rate_limiter
+    import uuid
+
+    rpm = 5
+    monkeypatch.setattr("app.rate_limiter._DEFAULT_RPM", rpm)
+    monkeypatch.setattr("app.rate_limiter._TIERS", {})
+
+    client_id = f"rl_remaining_{uuid.uuid4()}"
+    for expected_remaining in range(rpm - 1, -1, -1):
+        r = rate_limiter.check(client_id)
+        assert r.allowed is True
+        assert r.remaining == expected_remaining
+
+    for _ in range(3):
+        r = rate_limiter.check(client_id)
+        assert r.allowed is False
+        assert r.remaining == 0
+
+
 # ── Input length guard ─────────────────────────────────────
 
 def test_guard_rejects_input_exceeding_max_tokens():

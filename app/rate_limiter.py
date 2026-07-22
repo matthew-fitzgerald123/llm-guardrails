@@ -57,13 +57,22 @@ class RateLimiter:
         pipe = self.redis.pipeline()
         pipe.zremrangebyscore(key, 0, window_start)
         pipe.zcard(key)
-        pipe.zadd(key, {str(now): now})
         pipe.expire(key, 60)
         results = pipe.execute()
 
         count = results[1]
         allowed = count < rpm
-        remaining = max(0, rpm - count - 1)
+
+        if allowed:
+            # Only record the request when it is actually allowed; adding an
+            # entry for rejected requests would inflate the window count and
+            # push the client's reset time further into the future than the
+            # configured window (keeping them locked out longer than intended).
+            self.redis.zadd(key, {str(now): now})
+            self.redis.expire(key, 60)
+            remaining = max(0, rpm - count - 1)
+        else:
+            remaining = 0
 
         oldest = self.redis.zrange(key, 0, 0, withscores=True)
         reset_in = 60
