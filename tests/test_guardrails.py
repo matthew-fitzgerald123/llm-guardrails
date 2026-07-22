@@ -455,6 +455,54 @@ def test_filter_redacts_api_key_in_output():
     assert len(api_key_flags) == 1
 
 
+# ── Output filter: PII redaction in responses ─────────────
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("The user's card on file is 4111 1111 1111 1111 for billing")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+    assert any(f.get("type") == "credit_card_in_output" for f in r.flags)
+
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("We have SSN 123-45-6789 on record for this account")
+    assert "[SSN]" in r.filtered
+    assert r.blocked is False
+    assert any(f.get("type") == "ssn_in_output" for f in r.flags)
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Please call back at 555-867-5309 to confirm")
+    assert "[PHONE]" in r.filtered
+    assert r.blocked is False
+    assert any(f.get("type") == "phone_in_output" for f in r.flags)
+
+
+def test_check_output_endpoint_redacts_credit_card():
+    r = client.post("/check/output", json={
+        "text": "Your stored card is 4111 1111 1111 1111"
+    })
+    assert r.status_code == 200
+    assert "[CREDIT_CARD]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
+def test_check_output_endpoint_redacts_ssn():
+    r = client.post("/check/output", json={
+        "text": "Social security on file: 987-65-4321"
+    })
+    assert r.status_code == 200
+    assert "[SSN]" in r.json()["filtered"]
+
+
+def test_check_output_endpoint_redacts_phone():
+    r = client.post("/check/output", json={
+        "text": "Contact number: (800) 555-1234"
+    })
+    assert r.status_code == 200
+    assert "[PHONE]" in r.json()["filtered"]
+
+
 # ── Audit stats: field validation ─────────────────────────
 
 def test_audit_stats_has_expected_fields_when_data_present():
