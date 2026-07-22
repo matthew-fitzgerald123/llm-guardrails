@@ -493,3 +493,83 @@ def test_audit_log_clean_input_stored_unchanged():
         assert "What is the speed of light?" in log.input_text
     finally:
         db.close()
+
+
+# ── Audit endpoint client_id filtering ────────────────────────
+
+def test_audit_logs_filtered_by_client_id():
+    unique_client = "filter_test_logs_client"
+    client.post("/guard/query", json={
+        "query": "What is entropy?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/logs?client_id={unique_client}")
+    assert r.status_code == 200
+    entries = r.json()
+    assert len(entries) >= 1
+    assert all(e["client_id"] == unique_client for e in entries)
+
+
+def test_audit_logs_filter_excludes_other_clients():
+    client.post("/guard/query", json={
+        "query": "What is entropy?",
+        "client_id": "filter_other_client_A",
+    })
+    r = client.get("/audit/logs?client_id=filter_other_client_A")
+    assert r.status_code == 200
+    entries = r.json()
+    assert all(e["client_id"] == "filter_other_client_A" for e in entries)
+    r2 = client.get("/audit/logs?client_id=filter_other_client_B_no_requests")
+    assert r2.status_code == 200
+    assert r2.json() == []
+
+
+def test_audit_flagged_filtered_by_client_id():
+    unique_client = "filter_test_flagged_client"
+    client.post("/guard/query", json={
+        "query": "My SSN is 111-22-3333 please help",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/flagged?client_id={unique_client}")
+    assert r.status_code == 200
+    entries = r.json()
+    assert len(entries) >= 1
+    assert all(e["client_id"] == unique_client for e in entries)
+
+
+def test_audit_flagged_filter_excludes_other_clients():
+    client.post("/guard/query", json={
+        "query": "My SSN is 222-33-4444 please help",
+        "client_id": "flagged_filter_client_X",
+    })
+    r = client.get("/audit/flagged?client_id=flagged_filter_client_X")
+    assert r.status_code == 200
+    for entry in r.json():
+        assert entry["client_id"] == "flagged_filter_client_X"
+    r2 = client.get("/audit/flagged?client_id=flagged_filter_nobody_ZZZZ")
+    assert r2.status_code == 200
+    assert r2.json() == []
+
+
+def test_audit_stats_filtered_by_client_id():
+    unique_client = "filter_stats_client_unique"
+    client.post("/guard/query", json={
+        "query": "What is Python?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/stats?client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    if "message" not in data:
+        assert data["total_requests"] >= 1
+        assert all(
+            key in data
+            for key in ("total_requests", "blocked", "flagged", "block_rate", "avg_latency_ms", "flag_breakdown")
+        )
+
+
+def test_audit_stats_filter_empty_client_returns_no_data_message():
+    r = client.get("/audit/stats?client_id=nonexistent_client_ZYXW")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" in data
