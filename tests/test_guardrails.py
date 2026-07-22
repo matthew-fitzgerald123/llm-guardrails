@@ -396,3 +396,100 @@ def test_audit_stats_has_expected_fields_when_populated():
         assert isinstance(data["total_requests"], int)
         assert isinstance(data["block_rate"], float)
         assert 0.0 <= data["block_rate"] <= 1.0
+
+
+# ── Audit log PII storage ──────────────────────────────────
+
+
+def test_audit_log_does_not_store_raw_ssn():
+    from app.database import SessionLocal
+    from app.models import AuditLog
+
+    r = client.post("/guard/query", json={
+        "query": "My SSN is 123-45-6789 please help",
+        "client_id": "pii_audit_ssn_test",
+    })
+    request_id = r.json().get("request_id")
+    assert request_id is not None
+
+    db = SessionLocal()
+    try:
+        log = db.query(AuditLog).filter_by(request_id=request_id).first()
+        assert log is not None
+        assert "123-45-6789" not in log.input_text
+        assert "[SSN]" in log.input_text
+    finally:
+        db.close()
+
+
+def test_audit_log_does_not_store_raw_credit_card():
+    from app.database import SessionLocal
+    from app.models import AuditLog
+
+    r = client.post("/guard/query", json={
+        "query": "Charge card 4111 1111 1111 1111 for the order",
+        "client_id": "pii_audit_cc_test",
+    })
+    request_id = r.json().get("request_id")
+    assert request_id is not None
+
+    db = SessionLocal()
+    try:
+        log = db.query(AuditLog).filter_by(request_id=request_id).first()
+        assert log is not None
+        assert "4111 1111 1111 1111" not in log.input_text
+        assert "[CREDIT_CARD]" in log.input_text
+    finally:
+        db.close()
+
+
+def test_audit_log_blocked_replay_does_not_store_raw_pii():
+    from app.database import SessionLocal
+    from app.models import AuditLog
+    import uuid
+
+    nonce = str(uuid.uuid4())
+    pii_query = "My SSN is 987-65-4321 please process"
+    client.post("/guard/query", json={
+        "query": pii_query,
+        "client_id": "blocked_pii_replay_test",
+        "nonce": nonce,
+    })
+    r2 = client.post("/guard/query", json={
+        "query": pii_query,
+        "client_id": "blocked_pii_replay_test",
+        "nonce": nonce,
+    })
+    assert r2.status_code == 409
+
+    db = SessionLocal()
+    try:
+        logs = (
+            db.query(AuditLog)
+            .filter_by(client_id="blocked_pii_replay_test")
+            .all()
+        )
+        for log in logs:
+            assert "987-65-4321" not in log.input_text
+    finally:
+        db.close()
+
+
+def test_audit_log_clean_input_stored_unchanged():
+    from app.database import SessionLocal
+    from app.models import AuditLog
+
+    r = client.post("/guard/query", json={
+        "query": "What is the speed of light?",
+        "client_id": "clean_audit_test",
+    })
+    request_id = r.json().get("request_id")
+    assert request_id is not None
+
+    db = SessionLocal()
+    try:
+        log = db.query(AuditLog).filter_by(request_id=request_id).first()
+        assert log is not None
+        assert "What is the speed of light?" in log.input_text
+    finally:
+        db.close()
