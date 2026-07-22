@@ -747,3 +747,65 @@ def test_audit_stats_unknown_client_returns_no_data_message():
 def test_audit_stats_hours_zero_returns_no_data_or_message():
     r = client.get("/audit/stats?hours=0")
     assert r.status_code == 200
+
+
+# ── Audit dashboard: client_id filter ─────────────────────
+
+def test_audit_dashboard_client_id_filter_returns_client_id_in_response():
+    unique_id = "dashboard_client_filter_test"
+    client.post("/guard/query", json={
+        "query": "Explain overfitting briefly",
+        "client_id": unique_id,
+    })
+    r = client.get(f"/audit/dashboard?client_id={unique_id}&hours=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("client_id") == unique_id
+
+
+def test_audit_dashboard_client_id_filter_excludes_other_clients():
+    target_id = "dashboard_client_isolated_abc"
+    other_id = "dashboard_client_isolated_xyz"
+    client.post("/guard/query", json={
+        "query": "What is a neural network?",
+        "client_id": target_id,
+    })
+    client.post("/guard/query", json={
+        "query": "Describe dropout regularization",
+        "client_id": other_id,
+    })
+    r = client.get(f"/audit/dashboard?client_id={target_id}&hours=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["summary"]["total_requests"] >= 1
+    for entry in data.get("recent_flagged", []):
+        assert entry["client_id"] == target_id
+
+
+def test_audit_dashboard_client_id_filter_unknown_client_returns_zero_counts():
+    r = client.get("/audit/dashboard?client_id=client_that_never_existed_xyz&hours=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["summary"]["total_requests"] == 0
+    assert data["summary"]["blocked"] == 0
+    assert data["recent_flagged"] == []
+
+
+def test_audit_dashboard_without_client_id_has_no_client_id_field():
+    r = client.get("/audit/dashboard?hours=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert "client_id" not in data
+
+
+def test_audit_dashboard_client_id_filter_timeline_counts_only_that_client():
+    unique_id = "dashboard_timeline_client_test"
+    client.post("/guard/query", json={
+        "query": "What is gradient descent?",
+        "client_id": unique_id,
+    })
+    r = client.get(f"/audit/dashboard?client_id={unique_id}&hours=1&bucket_minutes=60")
+    assert r.status_code == 200
+    data = r.json()
+    total_in_timeline = sum(b["total"] for b in data["timeline"])
+    assert total_in_timeline == data["summary"]["total_requests"]

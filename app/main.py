@@ -303,12 +303,20 @@ def audit_stats(
     return result
 
 @app.get("/audit/dashboard", tags=["observability"])
-def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+def audit_dashboard(
+    hours: int = 24,
+    bucket_minutes: int = 60,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     from datetime import datetime, timedelta
     from collections import defaultdict
 
     since = datetime.utcnow() - timedelta(hours=hours)
-    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+    q = db.query(AuditLog).filter(AuditLog.created_at >= since)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
 
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
@@ -353,10 +361,14 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
         })
 
     total = len(logs)
-    recent_flagged_rows = (
+    fq = (
         db.query(FlaggedRequest)
         .filter(FlaggedRequest.created_at >= since)
-        .order_by(FlaggedRequest.created_at.desc())
+    )
+    if client_id:
+        fq = fq.filter(FlaggedRequest.client_id == client_id)
+    recent_flagged_rows = (
+        fq.order_by(FlaggedRequest.created_at.desc())
         .limit(20)
         .all()
     )
@@ -372,7 +384,7 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
         for f in recent_flagged_rows
     ]
 
-    return {
+    result: dict = {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
         "summary": {
@@ -387,6 +399,9 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
         "total_requests": total,
         "timeline":       timeline,
     }
+    if client_id:
+        result["client_id"] = client_id
+    return result
 
 
 @app.get("/health")
