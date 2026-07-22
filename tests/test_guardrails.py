@@ -503,6 +503,56 @@ def test_check_output_endpoint_redacts_phone():
     assert "[PHONE]" in r.json()["filtered"]
 
 
+# ── Output filter: IBAN, IP address, DOB redaction ────────
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Transfer to GB29 NWBK 6016 1331 9268 19 please")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+    assert any(f.get("type") == "iban_in_output" for f in r.flags)
+
+
+def test_filter_redacts_ip_address_in_output():
+    r = filter_output("The origin IP was 203.0.113.45 from the request log")
+    assert "[IP_ADDRESS]" in r.filtered
+    assert r.blocked is False
+    assert any(f.get("type") == "ip_address_in_output" for f in r.flags)
+
+
+def test_filter_redacts_dob_in_output():
+    r = filter_output("The patient date of birth: 04/15/1985 is on record")
+    assert "[DOB]" in r.filtered
+    assert r.blocked is False
+    assert any(f.get("type") == "dob_in_output" for f in r.flags)
+
+
+def test_check_output_endpoint_redacts_iban():
+    r = client.post("/check/output", json={
+        "text": "Wire funds to DE89 3704 0044 0532 0130 00 immediately"
+    })
+    assert r.status_code == 200
+    assert "[IBAN]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
+def test_check_output_endpoint_redacts_ip_address():
+    r = client.post("/check/output", json={
+        "text": "Accessed from IP 192.168.0.1 at midnight"
+    })
+    assert r.status_code == 200
+    assert "[IP_ADDRESS]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
+def test_check_output_endpoint_redacts_dob():
+    r = client.post("/check/output", json={
+        "text": "DOB: 01/01/1990 found in the record"
+    })
+    assert r.status_code == 200
+    assert "[DOB]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
 # ── Audit stats: field validation ─────────────────────────
 
 def test_audit_stats_has_expected_fields_when_data_present():

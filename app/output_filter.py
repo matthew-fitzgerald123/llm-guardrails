@@ -26,7 +26,9 @@ BLOCK_PATTERNS = [
     },
 ]
 
-# Patterns that get redacted from outputs
+# Patterns that get redacted from outputs — ordered most-specific first so that
+# broader digit patterns (credit card) don't consume sub-sequences of more
+# specific ones (IBAN, API keys, email).
 REDACT_PATTERNS = [
     {
         "name": "email_in_output",
@@ -37,6 +39,12 @@ REDACT_PATTERNS = [
         "name": "api_key_in_output",
         "pattern": r"\b(?:sk|pk|api|key)[-_][A-Za-z0-9]{20,}\b",
         "replacement": "[API_KEY]",
+    },
+    {
+        "name": "iban_in_output",
+        # Must come before credit_card: IBAN digit groups match the CC pattern.
+        "pattern": r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Za-z0-9]{4}){2,7}(?:[ ]?[A-Za-z0-9]{1,3})?\b",
+        "replacement": "[IBAN]",
     },
     {
         "name": "credit_card_in_output",
@@ -52,6 +60,16 @@ REDACT_PATTERNS = [
         "name": "phone_in_output",
         "pattern": r"\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
         "replacement": "[PHONE]",
+    },
+    {
+        "name": "ip_address_in_output",
+        "pattern": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+        "replacement": "[IP_ADDRESS]",
+    },
+    {
+        "name": "dob_in_output",
+        "pattern": r"\b(?:dob|date of birth|born)[:\s]+\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b",
+        "replacement": "[DOB]",
     },
 ]
 
