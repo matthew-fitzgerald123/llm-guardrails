@@ -281,6 +281,19 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
     since = datetime.utcnow() - timedelta(hours=hours)
     logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
 
+    # Aggregate stats over the window
+    total = len(logs)
+    blocked_count = sum(1 for l in logs if l.blocked)
+    block_rate = round(blocked_count / total, 4) if total else 0.0
+    avg_latency = round(sum(l.latency_ms for l in logs if l.latency_ms) / total, 2) if total else 0.0
+
+    flag_breakdown: dict[str, int] = {}
+    for log in logs:
+        for f in (log.flags or []):
+            t = f.get("type", "unknown")
+            flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+
+    # Timeline bucketing
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
     })
@@ -300,21 +313,46 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
     timeline = []
     for bucket_key in sorted(buckets):
         b = buckets[bucket_key]
-        total = b["total"]
+        bucket_total = b["total"]
         timeline.append({
             "bucket":     bucket_key,
-            "total":      total,
+            "total":      bucket_total,
             "blocked":    b["blocked"],
             "flagged":    b["flagged"],
-            "block_rate": round(b["blocked"] / total, 4) if total else 0.0,
+            "block_rate": round(b["blocked"] / bucket_total, 4) if bucket_total else 0.0,
             "flag_types": dict(b["flag_types"]),
         })
+
+    # Recent flagged requests within the window
+    recent_flags = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .order_by(FlaggedRequest.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    recent_flagged = [
+        {
+            "request_id": f.request_id,
+            "client_id":  f.client_id,
+            "flag_type":  f.flag_type,
+            "severity":   f.severity,
+            "detail":     f.detail,
+            "created_at": str(f.created_at),
+        }
+        for f in recent_flags
+    ]
 
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
+        "total_requests": total,
+        "blocked":        blocked_count,
+        "block_rate":     block_rate,
+        "avg_latency_ms": avg_latency,
+        "flag_breakdown": flag_breakdown,
         "timeline":       timeline,
+        "recent_flagged": recent_flagged,
     }
 
 
