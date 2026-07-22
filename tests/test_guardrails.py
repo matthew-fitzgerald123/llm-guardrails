@@ -200,6 +200,59 @@ def test_filter_redacts_email_in_output():
     assert "[EMAIL]" in r.filtered
     assert r.blocked is False
 
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("The transaction used card 4111 1111 1111 1111")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("The patient's SSN on file is 123-45-6789")
+    assert "[SSN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Transfer to GB29 NWBK 6016 1331 9268 19 was completed")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Call back at 555-123-4567 to confirm")
+    assert "[PHONE]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ip_in_output():
+    r = filter_output("The server responded from 192.168.1.100")
+    assert "[IP_ADDRESS]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_api_key_in_output():
+    r = filter_output("Use this token: sk-abcdefghijklmnopqrstuvwxyz123456")
+    assert "[API_KEY]" in r.filtered
+    assert r.blocked is False
+
+
+def test_check_output_endpoint_redacts_credit_card():
+    r = client.post("/check/output", json={
+        "text": "Charged to card 4111 1111 1111 1111 successfully"
+    })
+    assert r.status_code == 200
+    assert "[CREDIT_CARD]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
+def test_check_output_endpoint_redacts_ssn():
+    r = client.post("/check/output", json={
+        "text": "SSN 987-65-4321 found in record"
+    })
+    assert r.status_code == 200
+    assert "[SSN]" in r.json()["filtered"]
+
 # ── API endpoint tests ─────────────────────────────────────
 
 def test_health():
@@ -327,3 +380,91 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Replay protector: peek method ─────────────────────────
+
+def test_replay_protector_peek_false_for_fresh_nonce():
+    from app.replay_protector import replay_protector
+    import uuid
+    nonce = str(uuid.uuid4())
+    assert replay_protector.peek(nonce) is False
+
+
+def test_replay_protector_peek_true_after_store():
+    from app.replay_protector import replay_protector
+    import uuid
+    nonce = str(uuid.uuid4())
+    replay_protector.check_and_store(nonce)
+    assert replay_protector.peek(nonce) is True
+
+
+def test_replay_protector_peek_does_not_consume_nonce():
+    """peek must be read-only: calling it should not prevent a future store."""
+    from app.replay_protector import replay_protector
+    import uuid
+    nonce = str(uuid.uuid4())
+    replay_protector.peek(nonce)
+    assert replay_protector.check_and_store(nonce) is True
+
+
+# ── Rate-limit before replay: nonce preservation ──────────
+
+def test_nonce_not_consumed_when_rate_limited(monkeypatch):
+    """A rate-limited request must not consume the nonce.
+    After the rate limit resets the client should be able to retry
+    with the same nonce without receiving a 409."""
+    import uuid
+    from app.rate_limiter import RateLimitResult
+    from app.replay_protector import replay_protector
+
+    nonce = str(uuid.uuid4())
+
+    monkeypatch.setattr(
+        "app.main.rate_limiter.check",
+        lambda *a, **kw: RateLimitResult(
+            allowed=False, remaining=0, reset_in_seconds=60, limit=60, tier="free"
+        ),
+    )
+
+    r = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "nonce_rate_limit_test",
+        "nonce": nonce,
+    })
+    assert r.status_code == 429
+
+    assert not replay_protector.peek(nonce), (
+        "Nonce should remain unconsumed after a rate-limited request so the "
+        "client can retry with the same nonce once the window resets"
+    )
+
+
+def test_replay_still_rejected_after_rate_limit_passes(monkeypatch):
+    """Once a request passes rate limiting and its nonce is stored,
+    a second identical request must still be rejected with 409."""
+    import uuid
+    from app.rate_limiter import RateLimitResult
+
+    nonce = str(uuid.uuid4())
+
+    monkeypatch.setattr(
+        "app.main.rate_limiter.check",
+        lambda *a, **kw: RateLimitResult(
+            allowed=True, remaining=59, reset_in_seconds=60, limit=60, tier="free"
+        ),
+    )
+
+    r1 = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "nonce_replay_after_rl_test",
+        "nonce": nonce,
+    })
+    assert r1.status_code in (200, 503)
+
+    r2 = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "nonce_replay_after_rl_test",
+        "nonce": nonce,
+    })
+    assert r2.status_code == 409
