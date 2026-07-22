@@ -44,13 +44,10 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     t_start = time.time()
     flags = []
 
-    # ── 1. Replay protection ───────────────────────────────
-    if req.nonce and replay_protector.is_replay(req.nonce):
-        _log_blocked(db, request_id, req.client_id, req.query,
-                     "replay_detected", [])
-        raise HTTPException(409, "Duplicate request: nonce already seen")
-
-    # ── 2. Rate limiting ──────────────────────────────────
+    # ── 1. Rate limiting ──────────────────────────────────
+    # Rate limiting runs first so that denied requests never consume a nonce.
+    # A rate-limited client must be able to retry with the same nonce once
+    # their window resets; consuming it here would force a 409 on retry.
     rl = rate_limiter.check(req.client_id, tier=req.tier)
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
@@ -64,13 +61,21 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
             }
         )
 
-    # ── 2. Input length check ──────────────────────────────
+    # ── 2. Replay protection ───────────────────────────────
+    # Runs after rate limiting so the nonce is only stored once the request
+    # is confirmed to be within the client's allowed rate.
+    if req.nonce and replay_protector.is_replay(req.nonce):
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     "replay_detected", [])
+        raise HTTPException(409, "Duplicate request: nonce already seen")
+
+    # ── 3. Input length check ──────────────────────────────
     if len(req.query.split()) > MAX_INPUT_TOKENS:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "input_too_long", flags)
         raise HTTPException(400, "Input exceeds maximum token limit")
 
-    # ── 3. Prompt injection detection ─────────────────────
+    # ── 4. Prompt injection detection ─────────────────────
     injection = detect(req.query)
     if injection.matched_patterns:
         flags.append({
