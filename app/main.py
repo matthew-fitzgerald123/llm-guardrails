@@ -204,33 +204,51 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
+    logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [
         {
-            "request_id": l.request_id,
-            "client_id":  l.client_id,
-            "blocked":    l.blocked,
-            "flags":      l.flags,
-            "latency_ms": l.latency_ms,
-            "created_at": str(l.created_at),
+            "request_id":    l.request_id,
+            "client_id":     l.client_id,
+            "blocked":       l.blocked,
+            "flags":         l.flags,
+            "input_redacted": l.input_redacted,
+            "latency_ms":    l.latency_ms,
+            "created_at":    str(l.created_at),
         }
         for l in logs
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    flag_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+    q = db.query(FlaggedRequest)
+    if client_id:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(FlaggedRequest.created_at >= since)
+    if flag_type:
+        q = q.filter(FlaggedRequest.flag_type == flag_type)
+    flags = q.order_by(FlaggedRequest.created_at.desc()).limit(limit).all()
     return [
         {
             "request_id": f.request_id,
@@ -244,8 +262,19 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
+def audit_stats(
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
+    logs = q.all()
     if not logs:
         return {"message": "No requests logged yet"}
     total = len(logs)
@@ -259,7 +288,7 @@ def audit_stats(db: Session = Depends(get_db)):
         for f in (l.flags or []):
             t = f.get("type", "unknown")
             flag_types[t] = flag_types.get(t, 0) + 1
-    return {
+    result = {
         "total_requests": total,
         "blocked":        blocked,
         "flagged":        flagged,
@@ -267,6 +296,11 @@ def audit_stats(db: Session = Depends(get_db)):
         "avg_latency_ms": avg_latency,
         "flag_breakdown": flag_types,
     }
+    if client_id:
+        result["client_id"] = client_id
+    if hours is not None:
+        result["window_hours"] = hours
+    return result
 
 @app.get("/audit/dashboard", tags=["observability"])
 def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
@@ -280,6 +314,12 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
     })
 
+    total_blocked = 0
+    total_flagged = 0
+    flag_breakdown: dict[str, int] = {}
+    latency_sum = 0.0
+    latency_count = 0
+
     for log in logs:
         ts = log.created_at
         bucket_key = ts.strftime("%Y-%m-%dT%H:") + f"{(ts.minute // bucket_minutes) * bucket_minutes:02d}"
@@ -287,10 +327,17 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
         b["total"] += 1
         if log.blocked:
             b["blocked"] += 1
+            total_blocked += 1
         if log.flags:
             b["flagged"] += 1
+            total_flagged += 1
             for f in log.flags:
-                b["flag_types"][f.get("type", "unknown")] += 1
+                t = f.get("type", "unknown")
+                b["flag_types"][t] += 1
+                flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+        if log.latency_ms is not None:
+            latency_sum += log.latency_ms
+            latency_count += 1
 
     timeline = []
     for bucket_key in sorted(buckets):
@@ -305,10 +352,39 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
             "flag_types": dict(b["flag_types"]),
         })
 
+    total = len(logs)
+    recent_flagged_rows = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .order_by(FlaggedRequest.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    recent_flagged = [
+        {
+            "request_id": f.request_id,
+            "client_id":  f.client_id,
+            "flag_type":  f.flag_type,
+            "severity":   f.severity,
+            "detail":     f.detail,
+            "created_at": str(f.created_at),
+        }
+        for f in recent_flagged_rows
+    ]
+
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
+        "summary": {
+            "total_requests": total,
+            "blocked":        total_blocked,
+            "flagged":        total_flagged,
+            "block_rate":     round(total_blocked / total, 4) if total else 0.0,
+            "avg_latency_ms": round(latency_sum / latency_count, 2) if latency_count else 0.0,
+            "flag_breakdown": flag_breakdown,
+        },
+        "recent_flagged": recent_flagged,
+        "total_requests": total,
         "timeline":       timeline,
     }
 
