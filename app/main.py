@@ -55,13 +55,18 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "rate_limit_exceeded", flags)
-        raise HTTPException(
+        return JSONResponse(
             status_code=429,
-            detail={
-                "error":        "Rate limit exceeded",
-                "limit":        rl.limit,
+            content={
+                "error":            "Rate limit exceeded",
+                "limit":            rl.limit,
                 "reset_in_seconds": rl.reset_in_seconds,
-            }
+            },
+            headers={
+                "X-RateLimit-Limit":     str(rl.limit),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset":     str(rl.reset_in_seconds),
+            },
         )
 
     # ── 2. Input length check ──────────────────────────────
@@ -145,19 +150,26 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     db.add(log)
     db.commit()
 
-    return {
-        "request_id": request_id,
-        "answer":     filter_result.filtered,
-        "flags":      flags,
-        "blocked":    filter_result.blocked,
-        "meta": {
-            "pii_scrubbed":         bool(scrub_result.entities_found),
-            "injection_score":      injection.confidence,
-            "rate_limit_remaining": rl.remaining,
-            "rate_limit_tier":      rl.tier,
-            "latency_ms":           latency,
+    return JSONResponse(
+        content={
+            "request_id": request_id,
+            "answer":     filter_result.filtered,
+            "flags":      flags,
+            "blocked":    filter_result.blocked,
+            "meta": {
+                "pii_scrubbed":         bool(scrub_result.entities_found),
+                "injection_score":      injection.confidence,
+                "rate_limit_remaining": rl.remaining,
+                "rate_limit_tier":      rl.tier,
+                "latency_ms":           latency,
+            },
         },
-    }
+        headers={
+            "X-RateLimit-Limit":     str(rl.limit),
+            "X-RateLimit-Remaining": str(rl.remaining),
+            "X-RateLimit-Reset":     str(rl.reset_in_seconds),
+        },
+    )
 
 
 @app.get("/tiers", tags=["guardrails"])

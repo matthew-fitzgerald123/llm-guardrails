@@ -327,3 +327,47 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Rate-limit response headers ────────────────────────────
+
+def test_guard_200_response_has_rate_limit_headers():
+    r = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "headers_test_200",
+    })
+    assert r.status_code in (200, 503)
+    assert "x-ratelimit-limit" in r.headers
+    assert "x-ratelimit-remaining" in r.headers
+    assert "x-ratelimit-reset" in r.headers
+
+
+def test_guard_429_response_has_rate_limit_headers(monkeypatch):
+    from app.rate_limiter import RateLimitResult
+
+    monkeypatch.setattr(
+        "app.main.rate_limiter.check",
+        lambda *a, **kw: RateLimitResult(
+            allowed=False, remaining=0, reset_in_seconds=42, limit=60, tier="free"
+        ),
+    )
+    r = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "headers_test_429",
+    })
+    assert r.status_code == 429
+    assert r.headers["x-ratelimit-limit"] == "60"
+    assert r.headers["x-ratelimit-remaining"] == "0"
+    assert r.headers["x-ratelimit-reset"] == "42"
+
+
+def test_rate_limit_headers_match_meta_on_200():
+    r = client.post("/guard/query", json={
+        "query": "What is 2 + 2?",
+        "client_id": "headers_meta_test",
+    })
+    assert r.status_code in (200, 503)
+    if r.status_code == 200:
+        meta = r.json()["meta"]
+        assert r.headers["x-ratelimit-remaining"] == str(meta["rate_limit_remaining"])
+        assert int(r.headers["x-ratelimit-limit"]) > 0
