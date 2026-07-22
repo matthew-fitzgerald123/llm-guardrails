@@ -23,5 +23,9 @@ class ReplayProtector:
     def is_replay(self, nonce: str) -> bool:
         return not self.check_and_store(nonce)
 
+    def peek(self, nonce: str) -> bool:
+        """Return True if nonce has been stored, without modifying Redis state."""
+        return bool(self.redis.exists(f"nonce:{nonce}"))
+
 
 replay_protector = ReplayProtector()
