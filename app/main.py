@@ -44,13 +44,10 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     t_start = time.time()
     flags = []
 
-    # ── 1. Replay protection ───────────────────────────────
-    if req.nonce and replay_protector.is_replay(req.nonce):
-        _log_blocked(db, request_id, req.client_id, req.query,
-                     "replay_detected", [])
-        raise HTTPException(409, "Duplicate request: nonce already seen")
-
-    # ── 2. Rate limiting ──────────────────────────────────
+    # ── 1. Rate limiting ──────────────────────────────────
+    # Rate limiting runs first so that denied requests never consume a nonce.
+    # A rate-limited client must be able to retry with the same nonce once
+    # their window resets; consuming it here would force a 409 on retry.
     rl = rate_limiter.check(req.client_id, tier=req.tier)
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
@@ -64,13 +61,21 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
             }
         )
 
-    # ── 2. Input length check ──────────────────────────────
+    # ── 2. Replay protection ───────────────────────────────
+    # Runs after rate limiting so the nonce is only stored once the request
+    # is confirmed to be within the client's allowed rate.
+    if req.nonce and replay_protector.is_replay(req.nonce):
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     "replay_detected", [])
+        raise HTTPException(409, "Duplicate request: nonce already seen")
+
+    # ── 3. Input length check ──────────────────────────────
     if len(req.query.split()) > MAX_INPUT_TOKENS:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "input_too_long", flags)
         raise HTTPException(400, "Input exceeds maximum token limit")
 
-    # ── 3. Prompt injection detection ─────────────────────
+    # ── 4. Prompt injection detection ─────────────────────
     injection = detect(req.query)
     if injection.matched_patterns:
         flags.append({
@@ -276,6 +281,19 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
     since = datetime.utcnow() - timedelta(hours=hours)
     logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
 
+    # Aggregate stats over the window
+    total = len(logs)
+    blocked_count = sum(1 for l in logs if l.blocked)
+    block_rate = round(blocked_count / total, 4) if total else 0.0
+    avg_latency = round(sum(l.latency_ms for l in logs if l.latency_ms) / total, 2) if total else 0.0
+
+    flag_breakdown: dict[str, int] = {}
+    for log in logs:
+        for f in (log.flags or []):
+            t = f.get("type", "unknown")
+            flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+
+    # Timeline bucketing
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
     })
@@ -295,21 +313,46 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
     timeline = []
     for bucket_key in sorted(buckets):
         b = buckets[bucket_key]
-        total = b["total"]
+        bucket_total = b["total"]
         timeline.append({
             "bucket":     bucket_key,
-            "total":      total,
+            "total":      bucket_total,
             "blocked":    b["blocked"],
             "flagged":    b["flagged"],
-            "block_rate": round(b["blocked"] / total, 4) if total else 0.0,
+            "block_rate": round(b["blocked"] / bucket_total, 4) if bucket_total else 0.0,
             "flag_types": dict(b["flag_types"]),
         })
+
+    # Recent flagged requests within the window
+    recent_flags = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .order_by(FlaggedRequest.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    recent_flagged = [
+        {
+            "request_id": f.request_id,
+            "client_id":  f.client_id,
+            "flag_type":  f.flag_type,
+            "severity":   f.severity,
+            "detail":     f.detail,
+            "created_at": str(f.created_at),
+        }
+        for f in recent_flags
+    ]
 
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
+        "total_requests": total,
+        "blocked":        blocked_count,
+        "block_rate":     block_rate,
+        "avg_latency_ms": avg_latency,
+        "flag_breakdown": flag_breakdown,
         "timeline":       timeline,
+        "recent_flagged": recent_flagged,
     }
 
 

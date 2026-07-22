@@ -26,17 +26,44 @@ BLOCK_PATTERNS = [
     },
 ]
 
-# Patterns that get redacted from outputs
+# Patterns that get redacted from outputs — mirrors the input PII scrubber's
+# high/medium-severity entities so that upstream agent responses cannot leak
+# the same sensitive data types that are scrubbed from requests.
 REDACT_PATTERNS = [
+    {
+        "name": "credit_card_in_output",
+        "pattern": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
+        "replacement": "[CREDIT_CARD]",
+    },
+    {
+        "name": "ssn_in_output",
+        "pattern": r"\b\d{3}-\d{2}-\d{4}\b",
+        "replacement": "[SSN]",
+    },
+    {
+        "name": "iban_in_output",
+        "pattern": r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Za-z0-9]{4}){2,7}(?:[ ]?[A-Za-z0-9]{1,3})?\b",
+        "replacement": "[IBAN]",
+    },
     {
         "name": "email_in_output",
         "pattern": r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b",
         "replacement": "[EMAIL]",
     },
     {
+        "name": "phone_in_output",
+        "pattern": r"\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
+        "replacement": "[PHONE]",
+    },
+    {
         "name": "api_key_in_output",
         "pattern": r"\b(?:sk|pk|api|key)[-_][A-Za-z0-9]{20,}\b",
         "replacement": "[API_KEY]",
+    },
+    {
+        "name": "ip_address_in_output",
+        "pattern": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+        "replacement": "[IP_ADDRESS]",
     },
 ]
 
