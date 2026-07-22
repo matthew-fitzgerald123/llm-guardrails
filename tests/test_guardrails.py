@@ -200,6 +200,59 @@ def test_filter_redacts_email_in_output():
     assert "[EMAIL]" in r.filtered
     assert r.blocked is False
 
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("The transaction used card 4111 1111 1111 1111")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("The patient's SSN on file is 123-45-6789")
+    assert "[SSN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Transfer to GB29 NWBK 6016 1331 9268 19 was completed")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Call back at 555-123-4567 to confirm")
+    assert "[PHONE]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ip_in_output():
+    r = filter_output("The server responded from 192.168.1.100")
+    assert "[IP_ADDRESS]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_api_key_in_output():
+    r = filter_output("Use this token: sk-abcdefghijklmnopqrstuvwxyz123456")
+    assert "[API_KEY]" in r.filtered
+    assert r.blocked is False
+
+
+def test_check_output_endpoint_redacts_credit_card():
+    r = client.post("/check/output", json={
+        "text": "Charged to card 4111 1111 1111 1111 successfully"
+    })
+    assert r.status_code == 200
+    assert "[CREDIT_CARD]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
+def test_check_output_endpoint_redacts_ssn():
+    r = client.post("/check/output", json={
+        "text": "SSN 987-65-4321 found in record"
+    })
+    assert r.status_code == 200
+    assert "[SSN]" in r.json()["filtered"]
+
 # ── API endpoint tests ─────────────────────────────────────
 
 def test_health():
