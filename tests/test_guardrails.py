@@ -262,6 +262,64 @@ def test_audit_dashboard_custom_window():
     assert data["bucket_minutes"] == 30
 
 
+def test_audit_dashboard_has_summary_field():
+    r = client.get("/audit/dashboard")
+    assert r.status_code == 200
+    data = r.json()
+    assert "summary" in data
+    summary = data["summary"]
+    for key in ("blocked", "flagged", "block_rate", "avg_latency_ms", "flag_breakdown"):
+        assert key in summary, f"summary missing key: {key}"
+    assert isinstance(summary["block_rate"], float)
+    assert 0.0 <= summary["block_rate"] <= 1.0
+
+
+def test_audit_dashboard_has_recent_flagged_field():
+    r = client.get("/audit/dashboard")
+    assert r.status_code == 200
+    data = r.json()
+    assert "recent_flagged" in data
+    assert isinstance(data["recent_flagged"], list)
+
+
+def test_audit_dashboard_recent_flagged_entry_shape():
+    client.post("/guard/query", json={
+        "query": "My SSN is 123-45-6789",
+        "client_id": "dashboard_shape_test",
+    })
+    r = client.get("/audit/dashboard")
+    assert r.status_code == 200
+    entries = r.json()["recent_flagged"]
+    if entries:
+        first = entries[0]
+        for key in ("request_id", "client_id", "flag_type", "severity", "detail", "created_at"):
+            assert key in first, f"recent_flagged entry missing key: {key}"
+
+
+def test_audit_dashboard_client_id_filter():
+    unique_client = "dashboard_filter_unique_client"
+    client.post("/guard/query", json={
+        "query": "My SSN is 444-55-6666",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/dashboard?client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_requests"] >= 1
+    for entry in data["recent_flagged"]:
+        assert entry["client_id"] == unique_client
+
+
+def test_audit_dashboard_client_id_filter_excludes_others():
+    r = client.get("/audit/dashboard?client_id=dashboard_nobody_ZZZZ")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_requests"] == 0
+    assert data["recent_flagged"] == []
+    assert data["summary"]["blocked"] == 0
+    assert data["summary"]["block_rate"] == 0.0
+
+
 # ── Input length guard ─────────────────────────────────────
 
 def test_guard_rejects_input_exceeding_max_tokens():
