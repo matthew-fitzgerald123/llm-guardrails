@@ -240,21 +240,53 @@ def flagged_requests(limit: int = 20, client_id: Optional[str] = None, db: Sessi
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
-    if not logs:
-        return {"message": "No requests logged yet"}
-    total = len(logs)
-    blocked = sum(1 for l in logs if l.blocked)
-    flagged = sum(1 for l in logs if l.flags)
+def audit_stats(
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import func
+    from datetime import datetime, timedelta
+
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
+
+    total = q.count()
+    if total == 0:
+        return {
+            "total_requests": 0,
+            "blocked": 0,
+            "flagged": 0,
+            "block_rate": 0.0,
+            "avg_latency_ms": 0.0,
+            "flag_breakdown": {},
+            "client_id": client_id,
+            "window_hours": hours,
+        }
+
+    blocked = q.filter(AuditLog.blocked.is_(True)).count()
     avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
+        db.query(func.avg(AuditLog.latency_ms))
+        .filter(AuditLog.id.in_(
+            q.with_entities(AuditLog.id).scalar_subquery()
+        ))
+        .scalar() or 0.0,
+        2,
     )
+
+    flagged = 0
     flag_types: dict[str, int] = {}
-    for l in logs:
-        for f in (l.flags or []):
-            t = f.get("type", "unknown")
-            flag_types[t] = flag_types.get(t, 0) + 1
+    for (flags_col,) in q.with_entities(AuditLog.flags).all():
+        if flags_col:
+            flagged += 1
+            for f in flags_col:
+                t = f.get("type", "unknown")
+                flag_types[t] = flag_types.get(t, 0) + 1
+
     return {
         "total_requests": total,
         "blocked":        blocked,
@@ -262,6 +294,8 @@ def audit_stats(db: Session = Depends(get_db)):
         "block_rate":     round(blocked / total, 4),
         "avg_latency_ms": avg_latency,
         "flag_breakdown": flag_types,
+        "client_id":      client_id,
+        "window_hours":   hours,
     }
 
 @app.get("/audit/dashboard", tags=["observability"])
