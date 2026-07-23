@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 from dataclasses import dataclass
+from app.pii_scrubber import scrub as _scrub_pii
 
 @dataclass
 class FilterResult:
@@ -67,6 +68,17 @@ def filter_output(text: str) -> FilterResult:
                 filtered,
                 flags=re.IGNORECASE,
             )
+
+    # Apply full PII scrubbing to catch types not covered by REDACT_PATTERNS above
+    # (SSN, credit cards, IBANs, phone numbers, IP addresses, DOBs, etc.)
+    pii = _scrub_pii(filtered)
+    if pii.entities_found:
+        for entity in pii.entities_found:
+            flags.append({
+                "type":     f"output_pii_{entity['type']}",
+                "severity": entity["severity"],
+            })
+        filtered = pii.redacted
 
     return FilterResult(
         original=text,
