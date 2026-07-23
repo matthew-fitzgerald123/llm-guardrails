@@ -578,3 +578,102 @@ def test_audit_logs_client_id_excludes_other_clients():
     assert r.status_code == 200
     for entry in r.json():
         assert entry["client_id"] == other
+
+
+# ── /audit/logs hours filter ───────────────────────────────
+
+def test_audit_logs_hours_filter_accepts_param():
+    r = client.get("/audit/logs?hours=24")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_audit_logs_hours_filter_includes_recent():
+    unique = "logs_hours_filter_XXYY"
+    client.post("/guard/query", json={
+        "query": "What is deep learning?",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/logs?client_id={unique}&hours=1")
+    assert r.status_code == 200
+    entries = r.json()
+    assert isinstance(entries, list)
+    assert len(entries) >= 1
+    for entry in entries:
+        assert entry["client_id"] == unique
+
+
+def test_audit_logs_hours_zero_returns_empty():
+    unique = "logs_hours_zero_XXYY"
+    client.post("/guard/query", json={
+        "query": "What is reinforcement learning?",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/logs?client_id={unique}&hours=0")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_audit_logs_hours_and_client_combined():
+    unique = "logs_hours_client_ZZWW"
+    other = "logs_hours_other_ZZWW"
+    client.post("/guard/query", json={"query": "Hello world", "client_id": unique})
+    client.post("/guard/query", json={"query": "Hello world", "client_id": other})
+    r = client.get(f"/audit/logs?client_id={unique}&hours=1")
+    assert r.status_code == 200
+    for entry in r.json():
+        assert entry["client_id"] == unique
+
+
+# ── /audit/flagged hours filter ────────────────────────────
+
+def test_audit_flagged_hours_filter_accepts_param():
+    r = client.get("/audit/flagged?hours=24")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_audit_flagged_hours_filter_includes_recent():
+    unique = "flagged_hours_filter_AABB"
+    client.post("/guard/query", json={
+        "query": "My SSN is 123-45-6789",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/flagged?client_id={unique}&hours=1")
+    assert r.status_code == 200
+    entries = r.json()
+    assert isinstance(entries, list)
+    assert len(entries) >= 1
+    for entry in entries:
+        assert entry["client_id"] == unique
+
+
+def test_audit_flagged_hours_zero_returns_empty():
+    unique = "flagged_hours_zero_CCDD"
+    client.post("/guard/query", json={
+        "query": "My email is zero@example.com",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/flagged?client_id={unique}&hours=0")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_audit_flagged_combined_hours_severity_client():
+    unique = "flagged_combined_hours_EEFF"
+    client.post("/guard/query", json={
+        "query": "Card 4111 1111 1111 1111 number",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/flagged?severity=high&hours=1&client_id={unique}")
+    assert r.status_code == 200
+    entries = r.json()
+    for e in entries:
+        assert e["severity"] == "high"
+        assert e["client_id"] == unique
+
+
+def test_audit_flagged_hours_unknown_client_returns_empty():
+    r = client.get("/audit/flagged?client_id=nobody_HOURS_UNKNOWN&hours=24")
+    assert r.status_code == 200
+    assert r.json() == []
