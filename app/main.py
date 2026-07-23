@@ -204,10 +204,16 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
     logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
+        q.order_by(AuditLog.created_at.desc())
         .limit(limit)
         .all()
     )
@@ -252,8 +258,19 @@ def flagged_requests(
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
+def audit_stats(
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
+    logs = q.all()
     if not logs:
         return {"message": "No requests logged yet"}
     total = len(logs)

@@ -497,3 +497,84 @@ def test_audit_flagged_combined_filters():
     for e in entries:
         assert e["client_id"] == unique
         assert e["severity"] == "high"
+
+
+# ── /audit/stats filters ───────────────────────────────────
+
+def test_audit_stats_client_id_filter():
+    unique = "stats_client_filter_QQRR"
+    client.post("/guard/query", json={
+        "query": "My email is stats@example.com",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/stats?client_id={unique}")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_requests" in data
+    assert data["total_requests"] >= 1
+
+
+def test_audit_stats_unknown_client_returns_no_requests():
+    r = client.get("/audit/stats?client_id=nobody_STATS_UNKNOWN_XYZ")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" in data
+
+
+def test_audit_stats_hours_window_returns_shape():
+    r = client.get("/audit/stats?hours=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" in data or "total_requests" in data
+
+
+def test_audit_stats_client_id_excludes_other_clients():
+    unique = "stats_isolate_client_MMNN"
+    other = "stats_other_client_MMNN"
+    client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/stats?client_id={other}")
+    assert r.status_code == 200
+    data = r.json()
+    if "total_requests" in data:
+        for _ in range(1):
+            pass
+    assert "message" in data or data.get("total_requests", 0) == 0
+
+
+# ── /audit/logs client_id filter ──────────────────────────
+
+def test_audit_logs_client_id_filter():
+    unique = "logs_filter_client_PPQQ"
+    client.post("/guard/query", json={
+        "query": "What is deep learning?",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/logs?client_id={unique}")
+    assert r.status_code == 200
+    entries = r.json()
+    assert isinstance(entries, list)
+    assert len(entries) >= 1
+    for entry in entries:
+        assert entry["client_id"] == unique
+
+
+def test_audit_logs_unknown_client_returns_empty():
+    r = client.get("/audit/logs?client_id=nobody_LOGS_UNKNOWN_XYZ")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_audit_logs_client_id_excludes_other_clients():
+    unique = "logs_only_this_client_RRSS"
+    other = "logs_other_client_RRSS"
+    client.post("/guard/query", json={
+        "query": "Hello world",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/logs?client_id={other}&limit=50")
+    assert r.status_code == 200
+    for entry in r.json():
+        assert entry["client_id"] == other
