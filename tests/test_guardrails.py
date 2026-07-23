@@ -677,3 +677,125 @@ def test_audit_flagged_hours_unknown_client_returns_empty():
     r = client.get("/audit/flagged?client_id=nobody_HOURS_UNKNOWN&hours=24")
     assert r.status_code == 200
     assert r.json() == []
+
+
+# ── Rate limiter unit tests ────────────────────────────────
+
+def _with_test_tier(tier_name: str, limit: int):
+    """Context helper: temporarily registers a low-RPM tier for rate limit tests."""
+    from app import rate_limiter as rl_module
+    import contextlib
+
+    @contextlib.contextmanager
+    def _ctx():
+        original = dict(rl_module._TIERS)
+        rl_module._TIERS[tier_name] = limit
+        try:
+            yield
+        finally:
+            rl_module._TIERS.clear()
+            rl_module._TIERS.update(original)
+
+    return _ctx()
+
+
+def test_rate_limiter_allows_up_to_limit():
+    from app import rate_limiter as rl_module
+    import uuid as _uuid
+
+    tier = f"test_tier_{_uuid.uuid4().hex[:8]}"
+    limit = 3
+    cid = f"rl_unit_{_uuid.uuid4().hex}"
+
+    with _with_test_tier(tier, limit):
+        for i in range(limit):
+            result = rl_module.rate_limiter.check(cid, tier=tier)
+            assert result.allowed, f"Request {i + 1} of {limit} should be allowed"
+            assert result.limit == limit
+            assert result.tier == tier
+
+
+def test_rate_limiter_blocks_after_limit():
+    from app import rate_limiter as rl_module
+    import uuid as _uuid
+
+    tier = f"test_tier_{_uuid.uuid4().hex[:8]}"
+    limit = 3
+    cid = f"rl_block_{_uuid.uuid4().hex}"
+
+    with _with_test_tier(tier, limit):
+        for _ in range(limit):
+            rl_module.rate_limiter.check(cid, tier=tier)
+
+        over = rl_module.rate_limiter.check(cid, tier=tier)
+        assert not over.allowed
+        assert over.remaining == 0
+        assert over.limit == limit
+
+
+def test_rate_limiter_remaining_decrements():
+    from app import rate_limiter as rl_module
+    import uuid as _uuid
+
+    tier = f"test_tier_{_uuid.uuid4().hex[:8]}"
+    limit = 5
+    cid = f"rl_rem_{_uuid.uuid4().hex}"
+
+    with _with_test_tier(tier, limit):
+        prev = limit
+        for _ in range(limit):
+            r = rl_module.rate_limiter.check(cid, tier=tier)
+            assert r.remaining < prev
+            prev = r.remaining
+
+
+def test_rate_limit_429_response_has_required_fields():
+    from app import rate_limiter as rl_module
+    import uuid as _uuid
+
+    tier = f"test_tier_{_uuid.uuid4().hex[:8]}"
+    limit = 2
+    cid = f"rl_429_{_uuid.uuid4().hex}"
+
+    with _with_test_tier(tier, limit):
+        for _ in range(limit):
+            client.post("/guard/query", json={
+                "query": "Hello world",
+                "client_id": cid,
+                "tier": tier,
+            })
+
+        r = client.post("/guard/query", json={
+            "query": "Hello world",
+            "client_id": cid,
+            "tier": tier,
+        })
+        assert r.status_code == 429
+        detail = r.json()["detail"]
+        assert "error" in detail
+        assert "limit" in detail
+        assert "reset_in_seconds" in detail
+        assert detail["limit"] == limit
+
+
+def test_denied_requests_do_not_consume_rate_limit_slots():
+    """Denied requests must not reduce future capacity (Lua atomicity fix)."""
+    from app import rate_limiter as rl_module
+    import uuid as _uuid
+
+    tier = f"test_tier_{_uuid.uuid4().hex[:8]}"
+    limit = 2
+    cid = f"rl_deny_slot_{_uuid.uuid4().hex}"
+
+    with _with_test_tier(tier, limit):
+        for _ in range(limit):
+            rl_module.rate_limiter.check(cid, tier=tier)
+
+        for _ in range(5):
+            denied = rl_module.rate_limiter.check(cid, tier=tier)
+            assert not denied.allowed
+
+        # remaining must be 0, not negative — denied requests did not add slots
+        final = rl_module.rate_limiter.check(cid, tier=tier)
+        assert final.remaining == 0
+        assert not final.allowed

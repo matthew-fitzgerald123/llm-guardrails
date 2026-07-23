@@ -1,6 +1,6 @@
 from __future__ import annotations
 import redis as redis_lib
-import time, os
+import time, os, uuid
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -31,6 +31,32 @@ def _rpm_for_tier(tier: str) -> int:
     return _TIERS.get(tier, _DEFAULT_RPM)
 
 
+# Atomic sliding-window rate-limit check via Lua script.
+# The script runs entirely inside Redis, so concurrent requests cannot race past
+# the limit. Denied requests are never added to the window, so they do not
+# consume future capacity.
+_RATE_LIMIT_SCRIPT = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window_start = tonumber(ARGV[2])
+local rpm = tonumber(ARGV[3])
+local member = ARGV[4]
+
+redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
+local count = redis.call('ZCARD', key)
+
+if count < rpm then
+    redis.call('ZADD', key, now, member)
+    redis.call('EXPIRE', key, 65)
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    return {1, count + 1, oldest[2] or tostring(now)}
+else
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    return {0, count, oldest[2] or tostring(now)}
+end
+"""
+
+
 @dataclass
 class RateLimitResult:
     allowed: bool
@@ -45,6 +71,7 @@ class RateLimiter:
         self.redis = redis_lib.from_url(
             os.getenv("REDIS_URL", "redis://localhost:6379")
         )
+        self._script = self.redis.register_script(_RATE_LIMIT_SCRIPT)
 
     def check(self, client_id: str, tier: str | None = None) -> RateLimitResult:
         resolved_tier = tier or _DEFAULT_TIER
@@ -53,22 +80,16 @@ class RateLimiter:
         now = time.time()
         window_start = now - 60
         key = f"ratelimit:{client_id}"
+        member = f"{now:.6f}:{uuid.uuid4().hex}"
 
-        pipe = self.redis.pipeline()
-        pipe.zremrangebyscore(key, 0, window_start)
-        pipe.zcard(key)
-        pipe.zadd(key, {str(now): now})
-        pipe.expire(key, 60)
-        results = pipe.execute()
+        result = self._script(keys=[key], args=[now, window_start, rpm, member])
 
-        count = results[1]
-        allowed = count < rpm
-        remaining = max(0, rpm - count - 1)
+        allowed = bool(result[0])
+        count = int(result[1])
+        oldest_score = float(result[2])
 
-        oldest = self.redis.zrange(key, 0, 0, withscores=True)
-        reset_in = 60
-        if oldest:
-            reset_in = max(0, int(60 - (now - oldest[0][1])))
+        remaining = max(0, rpm - count)
+        reset_in = max(0, int(60 - (now - oldest_score)))
 
         return RateLimitResult(
             allowed=allowed,
