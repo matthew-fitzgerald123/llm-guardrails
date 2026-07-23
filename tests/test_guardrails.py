@@ -349,6 +349,54 @@ def test_check_output_endpoint_blocks_harmful_code():
     assert r.json()["blocked"] is True
 
 
+# ── Output filter: PII scrubbing in responses ──────────────
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("The patient SSN is 123-45-6789 on file")
+    assert "[SSN]" in r.filtered
+    assert "123-45-6789" not in r.filtered
+    assert r.blocked is False
+    assert any("ssn" in f["type"] for f in r.flags)
+
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("Charge to card 4111 1111 1111 1111 was successful")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert "4111" not in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Call us back at 555-867-5309 for support")
+    assert "[PHONE]" in r.filtered
+    assert "555-867-5309" not in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ip_address_in_output():
+    r = filter_output("The request originated from 192.168.10.55")
+    assert "[IP_ADDRESS]" in r.filtered
+    assert "192.168.10.55" not in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Transfer to GB29 NWBK 6016 1331 9268 19 completed")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_check_output_endpoint_redacts_ssn():
+    r = client.post("/check/output", json={
+        "text": "Your SSN 987-65-4321 has been recorded"
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["blocked"] is False
+    assert "[SSN]" in data["filtered"]
+    assert "987-65-4321" not in data["filtered"]
+
+
 # ── PII: ip_address and date_of_birth ─────────────────────
 
 def test_scrub_ip_address():
