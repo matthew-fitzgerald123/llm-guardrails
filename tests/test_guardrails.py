@@ -433,3 +433,67 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── /audit/flagged filter tests ───────────────────────────
+
+def test_audit_flagged_filter_by_flag_type():
+    unique = "flagtype_filter_client"
+    client.post("/guard/query", json={
+        "query": "My SSN is 111-22-3333",
+        "client_id": unique,
+    })
+    r = client.get("/audit/flagged?flag_type=pii_ssn&limit=50")
+    assert r.status_code == 200
+    entries = r.json()
+    assert all(e["flag_type"] == "pii_ssn" for e in entries)
+
+
+def test_audit_flagged_filter_by_severity():
+    client.post("/guard/query", json={
+        "query": "My card number is 4111 1111 1111 1111",
+        "client_id": "severity_filter_client",
+    })
+    r = client.get("/audit/flagged?severity=high&limit=50")
+    assert r.status_code == 200
+    entries = r.json()
+    assert all(e["severity"] == "high" for e in entries)
+
+
+def test_audit_flagged_filter_by_client_id():
+    unique = "clientid_filter_unique_ZZZQ"
+    client.post("/guard/query", json={
+        "query": "My email is secret@example.com and SSN 444-55-6666",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/flagged?client_id={unique}&limit=50")
+    assert r.status_code == 200
+    entries = r.json()
+    assert len(entries) >= 1
+    assert all(e["client_id"] == unique for e in entries)
+
+
+def test_audit_flagged_unknown_client_id_returns_empty():
+    r = client.get("/audit/flagged?client_id=nobody_ZZZZZ_unknown")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_audit_flagged_unknown_flag_type_returns_empty():
+    r = client.get("/audit/flagged?flag_type=nonexistent_type_XYZ")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_audit_flagged_combined_filters():
+    unique = "combined_filter_client_AABB"
+    client.post("/guard/query", json={
+        "query": "Card 4111 1111 1111 1111 and SSN 555-66-7777",
+        "client_id": unique,
+    })
+    r = client.get(f"/audit/flagged?client_id={unique}&severity=high&limit=50")
+    assert r.status_code == 200
+    entries = r.json()
+    for e in entries:
+        assert e["client_id"] == unique
+        assert e["severity"] == "high"
