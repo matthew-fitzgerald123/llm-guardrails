@@ -204,10 +204,19 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
     q = db.query(AuditLog)
     if client_id:
         q = q.filter(AuditLog.client_id == client_id)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
     logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [
         {
@@ -223,10 +232,19 @@ def audit_logs(limit: int = 20, client_id: Optional[str] = None, db: Session = D
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
     q = db.query(FlaggedRequest)
     if client_id:
         q = q.filter(FlaggedRequest.client_id == client_id)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(FlaggedRequest.created_at >= since)
     flags = q.order_by(FlaggedRequest.created_at.desc()).limit(limit).all()
     return [
         {
@@ -300,13 +318,21 @@ def audit_stats(
     }
 
 @app.get("/audit/dashboard", tags=["observability"])
-def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+def audit_dashboard(
+    hours: int = 24,
+    bucket_minutes: int = 60,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     from sqlalchemy import func
     from datetime import datetime, timedelta
     from collections import defaultdict
 
     since = datetime.utcnow() - timedelta(hours=hours)
-    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+    logs_q = db.query(AuditLog).filter(AuditLog.created_at >= since)
+    if client_id:
+        logs_q = logs_q.filter(AuditLog.client_id == client_id)
+    logs = logs_q.all()
 
     # ── timeline buckets ───────────────────────────────────
     buckets: dict[str, dict] = defaultdict(lambda: {
@@ -353,9 +379,11 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
     avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
 
     # ── recent flagged requests in window ─────────────────
+    flagged_q = db.query(FlaggedRequest).filter(FlaggedRequest.created_at >= since)
+    if client_id:
+        flagged_q = flagged_q.filter(FlaggedRequest.client_id == client_id)
     recent_flagged_rows = (
-        db.query(FlaggedRequest)
-        .filter(FlaggedRequest.created_at >= since)
+        flagged_q
         .order_by(FlaggedRequest.created_at.desc())
         .limit(20)
         .all()
@@ -375,6 +403,7 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
+        "client_id":      client_id,
         "total_requests": n,
         "summary": {
             "blocked":       total_blocked,
