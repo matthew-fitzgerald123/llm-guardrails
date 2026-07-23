@@ -50,33 +50,44 @@ class RateLimiter:
         resolved_tier = tier or _DEFAULT_TIER
         rpm = _rpm_for_tier(resolved_tier)
 
-        now = time.time()
-        window_start = now - 60
-        key = f"ratelimit:{client_id}"
+        try:
+            now = time.time()
+            window_start = now - 60
+            key = f"ratelimit:{client_id}"
 
-        pipe = self.redis.pipeline()
-        pipe.zremrangebyscore(key, 0, window_start)
-        pipe.zcard(key)
-        pipe.zadd(key, {str(now): now})
-        pipe.expire(key, 60)
-        results = pipe.execute()
+            pipe = self.redis.pipeline()
+            pipe.zremrangebyscore(key, 0, window_start)
+            pipe.zcard(key)
+            pipe.zadd(key, {str(now): now})
+            pipe.expire(key, 60)
+            results = pipe.execute()
 
-        count = results[1]
-        allowed = count < rpm
-        remaining = max(0, rpm - count - 1)
+            count = results[1]
+            allowed = count < rpm
+            remaining = max(0, rpm - count - 1)
 
-        oldest = self.redis.zrange(key, 0, 0, withscores=True)
-        reset_in = 60
-        if oldest:
-            reset_in = max(0, int(60 - (now - oldest[0][1])))
+            oldest = self.redis.zrange(key, 0, 0, withscores=True)
+            reset_in = 60
+            if oldest:
+                reset_in = max(0, int(60 - (now - oldest[0][1])))
 
-        return RateLimitResult(
-            allowed=allowed,
-            remaining=remaining,
-            reset_in_seconds=reset_in,
-            limit=rpm,
-            tier=resolved_tier,
-        )
+            return RateLimitResult(
+                allowed=allowed,
+                remaining=remaining,
+                reset_in_seconds=reset_in,
+                limit=rpm,
+                tier=resolved_tier,
+            )
+        except redis_lib.RedisError:
+            # Fail-open: allow requests when Redis is unavailable so a Redis
+            # outage does not take down the entire guard service.
+            return RateLimitResult(
+                allowed=True,
+                remaining=-1,
+                reset_in_seconds=60,
+                limit=rpm,
+                tier=resolved_tier,
+            )
 
 
 rate_limiter = RateLimiter()

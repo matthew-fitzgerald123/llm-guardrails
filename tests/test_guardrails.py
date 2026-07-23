@@ -638,3 +638,49 @@ def test_audit_flagged_no_client_id_returns_all():
     assert r.status_code == 200
     client_ids = {e["client_id"] for e in r.json()}
     assert len(client_ids) > 1
+
+
+# ── Redis resilience ───────────────────────────────────────
+
+def test_rate_limiter_redis_down_fails_open():
+    """When Redis is unavailable, the rate limiter should fail-open and allow requests."""
+    import redis
+    from unittest.mock import patch
+    from app.rate_limiter import rate_limiter
+    with patch.object(rate_limiter.redis, "pipeline", side_effect=redis.RedisError("Connection refused")):
+        result = rate_limiter.check("redis_down_test_client")
+    assert result.allowed is True
+    assert result.remaining == -1
+
+
+def test_rate_limiter_redis_down_preserves_tier():
+    """The tier label should be correct even when Redis is unavailable."""
+    import redis
+    from unittest.mock import patch
+    from app.rate_limiter import rate_limiter
+    with patch.object(rate_limiter.redis, "pipeline", side_effect=redis.RedisError("timeout")):
+        result = rate_limiter.check("redis_tier_test", tier="free")
+    assert result.tier == "free"
+    assert result.allowed is True
+
+
+def test_replay_protector_redis_down_treats_nonce_as_fresh():
+    """When Redis is unavailable, a nonce should be treated as fresh (not a replay)."""
+    import uuid
+    import redis
+    from unittest.mock import patch
+    from app.replay_protector import replay_protector
+    nonce = str(uuid.uuid4())
+    with patch.object(replay_protector.redis, "set", side_effect=redis.RedisError("Connection refused")):
+        assert replay_protector.check_and_store(nonce) is True
+
+
+def test_replay_protector_redis_down_is_replay_returns_false():
+    """When Redis is unavailable, is_replay should return False so requests are not blocked."""
+    import uuid
+    import redis
+    from unittest.mock import patch
+    from app.replay_protector import replay_protector
+    nonce = str(uuid.uuid4())
+    with patch.object(replay_protector.redis, "set", side_effect=redis.RedisError("timeout")):
+        assert replay_protector.is_replay(nonce) is False
