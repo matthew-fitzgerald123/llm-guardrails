@@ -327,3 +327,65 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Output filter: extended PII redaction ──────────────────
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("Your card 4111 1111 1111 1111 has been charged.")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("Employee SSN on file: 123-45-6789.")
+    assert "[SSN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Send funds to GB29 NWBK 6016 1331 9268 19 immediately.")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Call us at 555-867-5309 for support.")
+    assert "[PHONE]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ip_address_in_output():
+    r = filter_output("The request came from 203.0.113.42 last night.")
+    assert "[IP_ADDRESS]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_dob_in_output():
+    r = filter_output("Patient date of birth: 04/15/1985 is confirmed.")
+    assert "[DOB]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_api_key_in_output():
+    r = filter_output("Your key is sk-abcdefghijklmnopqrstuvwxyz123456 — keep it safe.")
+    assert "[API_KEY]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_multiple_pii_types_in_output():
+    text = "Email support@company.com or call 800-555-0199 with card 4242 4242 4242 4242."
+    r = filter_output(text)
+    assert "[EMAIL]" in r.filtered
+    assert "[PHONE]" in r.filtered
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+    assert len(r.flags) >= 3
+
+
+def test_filter_redaction_does_not_alter_clean_text():
+    text = "Machine learning is a subset of artificial intelligence."
+    r = filter_output(text)
+    assert r.filtered == text
+    assert r.flags == []
+    assert r.blocked is False
