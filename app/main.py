@@ -125,6 +125,9 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     filter_result = filter_output(raw_output)
     if filter_result.flags:
         flags.extend([{"type": "output_" + f["type"]} for f in filter_result.flags])
+        for f in filter_result.flags:
+            _log_flag(db, request_id, req.client_id,
+                      "output_" + f["type"], "low", str(f.get("count", 1)))
     if filter_result.blocked:
         _log_flag(db, request_id, req.client_id,
                   "output_blocked", "high", filter_result.block_reason)
@@ -245,26 +248,37 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
 
 @app.get("/audit/stats", tags=["observability"])
 def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
-    if not logs:
+    from sqlalchemy import func
+
+    total = db.query(func.count(AuditLog.id)).scalar() or 0
+    if not total:
         return {"message": "No requests logged yet"}
-    total = len(logs)
-    blocked = sum(1 for l in logs if l.blocked)
-    flagged = sum(1 for l in logs if l.flags)
-    avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
+
+    blocked = (
+        db.query(func.count(AuditLog.id))
+        .filter(AuditLog.blocked.is_(True))
+        .scalar() or 0
     )
-    flag_types: dict[str, int] = {}
-    for l in logs:
-        for f in (l.flags or []):
-            t = f.get("type", "unknown")
-            flag_types[t] = flag_types.get(t, 0) + 1
+    avg_latency = db.query(func.avg(AuditLog.latency_ms)).scalar() or 0.0
+
+    flagged = (
+        db.query(func.count(func.distinct(FlaggedRequest.request_id)))
+        .scalar() or 0
+    )
+
+    flag_rows = (
+        db.query(FlaggedRequest.flag_type, func.count(FlaggedRequest.id))
+        .group_by(FlaggedRequest.flag_type)
+        .all()
+    )
+    flag_types = {row[0]: row[1] for row in flag_rows}
+
     return {
         "total_requests": total,
         "blocked":        blocked,
         "flagged":        flagged,
         "block_rate":     round(blocked / total, 4),
-        "avg_latency_ms": avg_latency,
+        "avg_latency_ms": round(float(avg_latency), 2),
         "flag_breakdown": flag_types,
     }
 
