@@ -1,5 +1,6 @@
 from __future__ import annotations
 import pytest
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 import sys
 sys.path.insert(0, ".")
@@ -327,3 +328,69 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Rate limit enforcement ─────────────────────────────────
+
+def test_rate_limit_returns_429_with_correct_fields():
+    from app.rate_limiter import RateLimitResult
+    blocked_result = RateLimitResult(
+        allowed=False, remaining=0, reset_in_seconds=45, limit=60, tier="free"
+    )
+    with patch("app.main.rate_limiter.check", return_value=blocked_result):
+        r = client.post("/guard/query", json={
+            "query": "What is machine learning?",
+            "client_id": "rate_limit_test_client",
+        })
+    assert r.status_code == 429
+    data = r.json()
+    assert "detail" in data
+    detail = data["detail"]
+    assert "error" in detail
+    assert "limit" in detail
+    assert "reset_in_seconds" in detail
+    assert detail["limit"] == 60
+    assert detail["reset_in_seconds"] == 45
+
+
+def test_rate_limit_violation_appears_in_audit_flagged():
+    from app.rate_limiter import RateLimitResult
+    import uuid
+    cid = f"rl_audit_test_{uuid.uuid4().hex[:8]}"
+    blocked_result = RateLimitResult(
+        allowed=False, remaining=0, reset_in_seconds=30, limit=10, tier="free"
+    )
+    with patch("app.main.rate_limiter.check", return_value=blocked_result):
+        client.post("/guard/query", json={
+            "query": "Hello world",
+            "client_id": cid,
+        })
+    r = client.get("/audit/flagged?limit=100")
+    assert r.status_code == 200
+    entries = r.json()
+    rl_entries = [e for e in entries if e["flag_type"] == "rate_limit_exceeded"
+                  and e["client_id"] == cid]
+    assert len(rl_entries) >= 1
+    entry = rl_entries[0]
+    assert entry["severity"] == "medium"
+    assert "tier=free" in entry["detail"]
+    assert "limit=10" in entry["detail"]
+
+
+def test_rate_limit_violation_logged_in_audit_logs():
+    from app.rate_limiter import RateLimitResult
+    import uuid
+    cid = f"rl_log_test_{uuid.uuid4().hex[:8]}"
+    blocked_result = RateLimitResult(
+        allowed=False, remaining=0, reset_in_seconds=30, limit=10, tier="free"
+    )
+    with patch("app.main.rate_limiter.check", return_value=blocked_result):
+        client.post("/guard/query", json={
+            "query": "Hello",
+            "client_id": cid,
+        })
+    r = client.get("/audit/logs?limit=100")
+    assert r.status_code == 200
+    logs = r.json()
+    rl_logs = [l for l in logs if l["client_id"] == cid and l["blocked"] is True]
+    assert len(rl_logs) >= 1
