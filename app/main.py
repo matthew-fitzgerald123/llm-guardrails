@@ -55,6 +55,9 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "rate_limit_exceeded", flags)
+        _log_flag(db, request_id, req.client_id,
+                  "rate_limit_exceeded", "medium",
+                  f"tier={rl.tier} limit={rl.limit}")
         raise HTTPException(
             status_code=429,
             detail={
