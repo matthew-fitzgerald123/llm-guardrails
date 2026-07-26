@@ -55,6 +55,9 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "rate_limit_exceeded", flags)
+        _log_flag(db, request_id, req.client_id,
+                  "rate_limit_exceeded", "medium",
+                  f"tier={rl.tier} limit={rl.limit}")
         raise HTTPException(
             status_code=429,
             detail={
@@ -204,33 +207,49 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    blocked_only: bool = False,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    if blocked_only:
+        q = q.filter(AuditLog.blocked == True)  # noqa: E712
+    logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [
         {
-            "request_id": l.request_id,
-            "client_id":  l.client_id,
-            "blocked":    l.blocked,
-            "flags":      l.flags,
-            "latency_ms": l.latency_ms,
-            "created_at": str(l.created_at),
+            "request_id":   l.request_id,
+            "client_id":    l.client_id,
+            "blocked":      l.blocked,
+            "block_reason": l.block_reason,
+            "input_text":   l.input_text,
+            "output_text":  l.output_text,
+            "flags":        l.flags,
+            "latency_ms":   l.latency_ms,
+            "created_at":   str(l.created_at),
         }
         for l in logs
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    flag_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(FlaggedRequest)
+    if client_id:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    if flag_type:
+        q = q.filter(FlaggedRequest.flag_type == flag_type)
+    if severity:
+        q = q.filter(FlaggedRequest.severity == severity)
+    flags = q.order_by(FlaggedRequest.created_at.desc()).limit(limit).all()
     return [
         {
             "request_id": f.request_id,
