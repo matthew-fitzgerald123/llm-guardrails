@@ -46,6 +46,8 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
 
     # ── 1. Replay protection ───────────────────────────────
     if req.nonce and replay_protector.is_replay(req.nonce):
+        _log_flag(db, request_id, req.client_id,
+                  "replay_detected", "high", req.nonce[:12])
         _log_blocked(db, request_id, req.client_id, req.query,
                      "replay_detected", [])
         raise HTTPException(409, "Duplicate request: nonce already seen")
@@ -66,6 +68,9 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
 
     # ── 2. Input length check ──────────────────────────────
     if len(req.query.split()) > MAX_INPUT_TOKENS:
+        word_count = len(req.query.split())
+        _log_flag(db, request_id, req.client_id,
+                  "input_too_long", "medium", f"{word_count} words")
         _log_blocked(db, request_id, req.client_id, req.query,
                      "input_too_long", flags)
         raise HTTPException(400, "Input exceeds maximum token limit")

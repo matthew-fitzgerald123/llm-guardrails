@@ -382,3 +382,52 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Replay and input-too-long appear in audit/flagged ─────
+
+def test_replay_block_creates_flagged_entry():
+    import uuid
+    nonce = str(uuid.uuid4())
+    cid = f"replay_flag_test_{uuid.uuid4().hex[:8]}"
+    # First request consumes the nonce
+    client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": cid,
+        "nonce": nonce,
+    })
+    # Second request is a replay → should be flagged
+    r2 = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": cid,
+        "nonce": nonce,
+    })
+    assert r2.status_code == 409
+
+    flagged = client.get("/audit/flagged?limit=100").json()
+    replay_entries = [
+        f for f in flagged
+        if f["client_id"] == cid and f["flag_type"] == "replay_detected"
+    ]
+    assert len(replay_entries) >= 1
+    assert replay_entries[0]["severity"] == "high"
+
+
+def test_input_too_long_creates_flagged_entry():
+    import uuid
+    cid = f"length_flag_test_{uuid.uuid4().hex[:8]}"
+    long_query = " ".join(["word"] * 2049)
+    r = client.post("/guard/query", json={
+        "query": long_query,
+        "client_id": cid,
+    })
+    assert r.status_code == 400
+
+    flagged = client.get("/audit/flagged?limit=100").json()
+    length_entries = [
+        f for f in flagged
+        if f["client_id"] == cid and f["flag_type"] == "input_too_long"
+    ]
+    assert len(length_entries) >= 1
+    assert length_entries[0]["severity"] == "medium"
+    assert "words" in length_entries[0]["detail"]
