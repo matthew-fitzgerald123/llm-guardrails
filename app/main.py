@@ -46,6 +46,8 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
 
     # ── 1. Replay protection ───────────────────────────────
     if req.nonce and replay_protector.is_replay(req.nonce):
+        _log_flag(db, request_id, req.client_id,
+                  "replay_detected", "high", req.nonce[:12])
         _log_blocked(db, request_id, req.client_id, req.query,
                      "replay_detected", [])
         raise HTTPException(409, "Duplicate request: nonce already seen")
@@ -66,6 +68,9 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
 
     # ── 2. Input length check ──────────────────────────────
     if len(req.query.split()) > MAX_INPUT_TOKENS:
+        word_count = len(req.query.split())
+        _log_flag(db, request_id, req.client_id,
+                  "input_too_long", "medium", f"{word_count} words")
         _log_blocked(db, request_id, req.client_id, req.query,
                      "input_too_long", flags)
         raise HTTPException(400, "Input exceeds maximum token limit")
@@ -244,71 +249,156 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
-    if not logs:
+def audit_stats(hours: Optional[int] = None, db: Session = Depends(get_db)):
+    from datetime import datetime, timedelta
+    from sqlalchemy import func, case
+
+    al_q = db.query(AuditLog)
+    fr_q = db.query(FlaggedRequest)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        al_q = al_q.filter(AuditLog.created_at >= since)
+        fr_q = fr_q.filter(FlaggedRequest.created_at >= since)
+
+    row = al_q.with_entities(
+        func.count(AuditLog.id),
+        func.sum(case((AuditLog.blocked == True, 1), else_=0)),  # noqa: E712
+        func.avg(AuditLog.latency_ms),
+    ).first()
+
+    total = int(row[0] or 0)
+    if total == 0:
         return {"message": "No requests logged yet"}
-    total = len(logs)
-    blocked = sum(1 for l in logs if l.blocked)
-    flagged = sum(1 for l in logs if l.flags)
-    avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
+
+    blocked = int(row[1] or 0)
+    avg_latency = round(float(row[2] or 0.0), 2)
+
+    flag_rows = fr_q.with_entities(
+        FlaggedRequest.flag_type,
+        func.count(FlaggedRequest.id),
+    ).group_by(FlaggedRequest.flag_type).all()
+    flag_breakdown = {ft: int(cnt) for ft, cnt in flag_rows}
+
+    flagged = int(
+        fr_q.with_entities(func.count(func.distinct(FlaggedRequest.request_id))).scalar() or 0
     )
-    flag_types: dict[str, int] = {}
-    for l in logs:
-        for f in (l.flags or []):
-            t = f.get("type", "unknown")
-            flag_types[t] = flag_types.get(t, 0) + 1
-    return {
+
+    result = {
         "total_requests": total,
         "blocked":        blocked,
         "flagged":        flagged,
         "block_rate":     round(blocked / total, 4),
         "avg_latency_ms": avg_latency,
-        "flag_breakdown": flag_types,
+        "flag_breakdown": flag_breakdown,
     }
+    if hours is not None:
+        result["window_hours"] = hours
+    return result
 
 @app.get("/audit/dashboard", tags=["observability"])
-def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, flagged_limit: int = 20, db: Session = Depends(get_db)):
     from datetime import datetime, timedelta
     from collections import defaultdict
+    from sqlalchemy import func, case
 
     since = datetime.utcnow() - timedelta(hours=hours)
-    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
 
+    # Overall stats via SQL aggregation
+    row = (
+        db.query(AuditLog)
+        .filter(AuditLog.created_at >= since)
+        .with_entities(
+            func.count(AuditLog.id),
+            func.sum(case((AuditLog.blocked == True, 1), else_=0)),  # noqa: E712
+            func.avg(AuditLog.latency_ms),
+        )
+        .first()
+    )
+    total = int(row[0] or 0)
+    blocked_count = int(row[1] or 0)
+    avg_latency = round(float(row[2] or 0.0), 2)
+
+    flag_rows = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .with_entities(FlaggedRequest.flag_type, func.count(FlaggedRequest.id))
+        .group_by(FlaggedRequest.flag_type)
+        .all()
+    )
+    flag_breakdown = {ft: int(cnt) for ft, cnt in flag_rows}
+
+    flagged_count = int(
+        db.query(func.count(func.distinct(FlaggedRequest.request_id)))
+        .filter(FlaggedRequest.created_at >= since)
+        .scalar() or 0
+    )
+
+    stats = {
+        "total_requests": total,
+        "blocked":        blocked_count,
+        "flagged":        flagged_count,
+        "block_rate":     round(blocked_count / total, 4) if total else 0.0,
+        "avg_latency_ms": avg_latency,
+        "flag_breakdown": flag_breakdown,
+    }
+
+    # Timeline bucketing via in-memory pass (only loads created_at + blocked + flags)
+    logs = (
+        db.query(AuditLog.created_at, AuditLog.blocked, AuditLog.flags)
+        .filter(AuditLog.created_at >= since)
+        .all()
+    )
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
     })
-
-    for log in logs:
-        ts = log.created_at
+    for ts, is_blocked, flags in logs:
         bucket_key = ts.strftime("%Y-%m-%dT%H:") + f"{(ts.minute // bucket_minutes) * bucket_minutes:02d}"
         b = buckets[bucket_key]
         b["total"] += 1
-        if log.blocked:
+        if is_blocked:
             b["blocked"] += 1
-        if log.flags:
+        if flags:
             b["flagged"] += 1
-            for f in log.flags:
+            for f in flags:
                 b["flag_types"][f.get("type", "unknown")] += 1
 
     timeline = []
     for bucket_key in sorted(buckets):
         b = buckets[bucket_key]
-        total = b["total"]
+        bt = b["total"]
         timeline.append({
             "bucket":     bucket_key,
-            "total":      total,
+            "total":      bt,
             "blocked":    b["blocked"],
             "flagged":    b["flagged"],
-            "block_rate": round(b["blocked"] / total, 4) if total else 0.0,
+            "block_rate": round(b["blocked"] / bt, 4) if bt else 0.0,
             "flag_types": dict(b["flag_types"]),
         })
+
+    # Recent flagged requests
+    recent_flagged = [
+        {
+            "request_id": f.request_id,
+            "client_id":  f.client_id,
+            "flag_type":  f.flag_type,
+            "severity":   f.severity,
+            "detail":     f.detail,
+            "created_at": str(f.created_at),
+        }
+        for f in (
+            db.query(FlaggedRequest)
+            .filter(FlaggedRequest.created_at >= since)
+            .order_by(FlaggedRequest.created_at.desc())
+            .limit(flagged_limit)
+            .all()
+        )
+    ]
 
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
+        "stats":          stats,
+        "recent_flagged": recent_flagged,
         "timeline":       timeline,
     }
 
