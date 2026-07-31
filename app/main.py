@@ -117,9 +117,23 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
                 upstream_response = r.json()
                 raw_output = upstream_response.get("final_answer", "")
             else:
-                raw_output = f"Upstream error: {r.status_code}"
+                _log_blocked(db, request_id, req.client_id, req.query,
+                             f"upstream_error_{r.status_code}", flags)
+                raise HTTPException(502, f"Upstream returned {r.status_code}")
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     "upstream_timeout", flags)
+        raise HTTPException(504, "Upstream request timed out")
     except httpx.ConnectError:
-        raw_output = "Upstream service unavailable"
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     "upstream_unavailable", flags)
+        raise HTTPException(503, "Upstream service unavailable")
+    except httpx.HTTPError as exc:
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     f"upstream_http_error", flags)
+        raise HTTPException(502, f"Upstream communication error: {type(exc).__name__}")
 
     # ── 6. Output filtering ────────────────────────────────
     filter_result = filter_output(raw_output)
