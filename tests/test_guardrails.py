@@ -182,7 +182,7 @@ def test_guarded_request_accepts_tier():
         "tier": "free",
         "max_steps": 1,
     })
-    assert r.status_code in (200, 429, 503)
+    assert r.status_code in (200, 429, 503, 504)
 
 # ── Output filter unit tests ───────────────────────────────
 
@@ -327,3 +327,64 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Upstream error handling ────────────────────────────────
+
+def test_upstream_connect_error_returns_503():
+    from unittest.mock import patch, AsyncMock
+    import httpx as httpx_mod
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock,
+               side_effect=httpx_mod.ConnectError("refused")):
+        r = client.post("/guard/query", json={
+            "query": "What is 2+2?",
+            "client_id": "upstream_err_test",
+        })
+    assert r.status_code == 503
+    assert "unavailable" in r.text.lower()
+
+
+def test_upstream_timeout_returns_504():
+    from unittest.mock import patch, AsyncMock
+    import httpx as httpx_mod
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock,
+               side_effect=httpx_mod.TimeoutException("timed out")):
+        r = client.post("/guard/query", json={
+            "query": "What is the capital of France?",
+            "client_id": "upstream_timeout_test",
+        })
+    assert r.status_code == 504
+    assert "timed out" in r.text.lower() or "timeout" in r.text.lower()
+
+
+def test_upstream_5xx_returns_502():
+    from unittest.mock import patch, AsyncMock, MagicMock
+    import httpx as httpx_mod
+    mock_response = MagicMock()
+    mock_response.status_code = 503
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock,
+               return_value=mock_response):
+        r = client.post("/guard/query", json={
+            "query": "Explain gradient descent",
+            "client_id": "upstream_5xx_test",
+        })
+    assert r.status_code == 502
+    assert "503" in r.text
+
+
+def test_upstream_connect_error_creates_audit_entry():
+    from unittest.mock import patch, AsyncMock
+    import httpx as httpx_mod
+    import uuid
+    cid = f"upstream_audit_{uuid.uuid4().hex[:8]}"
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock,
+               side_effect=httpx_mod.ConnectError("refused")):
+        r = client.post("/guard/query", json={
+            "query": "What is 2+2?",
+            "client_id": cid,
+        })
+    assert r.status_code == 503
+    logs = client.get("/audit/logs?limit=100").json()
+    entries = [l for l in logs if l["client_id"] == cid]
+    assert len(entries) >= 1
+    assert entries[0]["blocked"] is True
