@@ -117,9 +117,23 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
                 upstream_response = r.json()
                 raw_output = upstream_response.get("final_answer", "")
             else:
-                raw_output = f"Upstream error: {r.status_code}"
+                _log_blocked(db, request_id, req.client_id, req.query,
+                             f"upstream_error_{r.status_code}", flags)
+                raise HTTPException(502, f"Upstream returned {r.status_code}")
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     "upstream_timeout", flags)
+        raise HTTPException(504, "Upstream request timed out")
     except httpx.ConnectError:
-        raw_output = "Upstream service unavailable"
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     "upstream_unavailable", flags)
+        raise HTTPException(503, "Upstream service unavailable")
+    except httpx.HTTPError as exc:
+        _log_blocked(db, request_id, req.client_id, req.query,
+                     f"upstream_http_error", flags)
+        raise HTTPException(502, f"Upstream communication error: {type(exc).__name__}")
 
     # ── 6. Output filtering ────────────────────────────────
     filter_result = filter_output(raw_output)
@@ -275,11 +289,32 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
 
     since = datetime.utcnow() - timedelta(hours=hours)
     logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+    recent_flags_qs = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .order_by(FlaggedRequest.created_at.desc())
+        .limit(20)
+        .all()
+    )
 
+    # -- Summary stats for the window
+    total = len(logs)
+    blocked_count = sum(1 for l in logs if l.blocked)
+    flagged_count = sum(1 for l in logs if l.flags)
+    avg_latency = (
+        round(sum(l.latency_ms for l in logs if l.latency_ms) / total, 2)
+        if total else 0.0
+    )
+    flag_breakdown: dict[str, int] = {}
+    for l in logs:
+        for f in (l.flags or []):
+            t = f.get("type", "unknown")
+            flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+
+    # -- Timeline buckets
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
     })
-
     for log in logs:
         ts = log.created_at
         bucket_key = ts.strftime("%Y-%m-%dT%H:") + f"{(ts.minute // bucket_minutes) * bucket_minutes:02d}"
@@ -295,21 +330,39 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
     timeline = []
     for bucket_key in sorted(buckets):
         b = buckets[bucket_key]
-        total = b["total"]
+        bucket_total = b["total"]
         timeline.append({
             "bucket":     bucket_key,
-            "total":      total,
+            "total":      bucket_total,
             "blocked":    b["blocked"],
             "flagged":    b["flagged"],
-            "block_rate": round(b["blocked"] / total, 4) if total else 0.0,
+            "block_rate": round(b["blocked"] / bucket_total, 4) if bucket_total else 0.0,
             "flag_types": dict(b["flag_types"]),
         })
 
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
-        "timeline":       timeline,
+        "stats": {
+            "total_requests": total,
+            "blocked":        blocked_count,
+            "flagged":        flagged_count,
+            "block_rate":     round(blocked_count / total, 4) if total else 0.0,
+            "avg_latency_ms": avg_latency,
+            "flag_breakdown": flag_breakdown,
+        },
+        "recent_flagged": [
+            {
+                "request_id": f.request_id,
+                "client_id":  f.client_id,
+                "flag_type":  f.flag_type,
+                "severity":   f.severity,
+                "detail":     f.detail,
+                "created_at": str(f.created_at),
+            }
+            for f in recent_flags_qs
+        ],
+        "timeline": timeline,
     }
 
 
