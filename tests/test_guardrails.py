@@ -6,6 +6,7 @@ sys.path.insert(0, ".")
 
 from app.main import app
 from app.pii_scrubber import scrub
+import app.injection_detector as injection_detector
 from app.injection_detector import detect
 from app.output_filter import filter_output
 from app.semantic_detector import semantic_check
@@ -327,3 +328,65 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Configurable injection thresholds ─────────────────────
+
+def test_injection_block_threshold_default():
+    """Default BLOCK_THRESHOLD is 0.7 — encoding_evasion (weight 0.6) must not block."""
+    r = detect("the payload uses base64 encoding to evade filters")
+    assert r.is_injection is False
+    assert r.confidence == pytest.approx(0.6)
+
+
+def test_injection_flag_threshold_default():
+    """Default FLAG_THRESHOLD is 0.4 — encoding_evasion (0.6) should be medium severity."""
+    r = detect("the payload uses base64 encoding to evade filters")
+    assert r.severity == "medium"
+
+
+def test_injection_block_threshold_lowered():
+    """Lowering BLOCK_THRESHOLD below the match weight must cause blocking."""
+    original = injection_detector.BLOCK_THRESHOLD
+    try:
+        injection_detector.BLOCK_THRESHOLD = 0.5
+        r = detect("the payload uses base64 encoding to evade filters")
+        assert r.is_injection is True
+        assert r.severity == "high"
+    finally:
+        injection_detector.BLOCK_THRESHOLD = original
+
+
+def test_injection_flag_threshold_raised():
+    """Raising FLAG_THRESHOLD above the match weight must drop severity to low."""
+    original = injection_detector.FLAG_THRESHOLD
+    try:
+        injection_detector.FLAG_THRESHOLD = 0.65
+        r = detect("the payload uses base64 encoding to evade filters")
+        assert r.severity == "low"
+    finally:
+        injection_detector.FLAG_THRESHOLD = original
+
+
+def test_injection_block_threshold_raised():
+    """Raising BLOCK_THRESHOLD above encoding_evasion's confidence (0.6) must prevent blocking."""
+    # encoding_evasion weight=0.6; at threshold 0.65 the same query is not blocked
+    original = injection_detector.BLOCK_THRESHOLD
+    try:
+        injection_detector.BLOCK_THRESHOLD = 0.65
+        r = detect("the payload uses base64 encoding to evade filters")
+        assert r.is_injection is False
+        assert r.confidence == pytest.approx(0.6)
+    finally:
+        injection_detector.BLOCK_THRESHOLD = original
+
+
+def test_injection_thresholds_env_defaults():
+    """Module constants should reflect their documented defaults."""
+    import os
+    assert injection_detector.BLOCK_THRESHOLD == float(
+        os.getenv("INJECTION_BLOCK_THRESHOLD", "0.7")
+    )
+    assert injection_detector.FLAG_THRESHOLD == float(
+        os.getenv("INJECTION_FLAG_THRESHOLD", "0.4")
+    )

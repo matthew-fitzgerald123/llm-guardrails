@@ -1,7 +1,11 @@
 from __future__ import annotations
+import os
 import re
 from dataclasses import dataclass
 from app.semantic_detector import semantic_check
+from dotenv import load_dotenv
+
+load_dotenv()
 
 @dataclass
 class DetectionResult:
@@ -63,8 +67,8 @@ INJECTION_PATTERNS = [
     },
 ]
 
-BLOCK_THRESHOLD = 0.7
-FLAG_THRESHOLD  = 0.4
+BLOCK_THRESHOLD = float(os.getenv("INJECTION_BLOCK_THRESHOLD", "0.7"))
+FLAG_THRESHOLD  = float(os.getenv("INJECTION_FLAG_THRESHOLD", "0.4"))
 
 def detect(text: str) -> DetectionResult:
     matched = []
