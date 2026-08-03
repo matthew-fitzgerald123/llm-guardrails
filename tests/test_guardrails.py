@@ -327,3 +327,44 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Output filter: comprehensive PII redaction ─────────────
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("Patient SSN is 123-45-6789 for reference")
+    assert "[SSN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("Charge the card 4111 1111 1111 1111 for the order")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Call the customer at 555-123-4567 to confirm")
+    assert "[PHONE]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Transfer to GB29 NWBK 6016 1331 9268 19")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_check_output_endpoint_redacts_ssn():
+    r = client.post("/check/output", json={"text": "SSN on file: 987-65-4321"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["blocked"] is False
+    assert "[SSN]" in data["filtered"]
+
+
+def test_filter_output_flags_include_pii_types():
+    r = filter_output("Email test@example.com and SSN 123-45-6789 present")
+    flag_types = {f["type"] for f in r.flags}
+    assert "email" in flag_types
+    assert "ssn" in flag_types

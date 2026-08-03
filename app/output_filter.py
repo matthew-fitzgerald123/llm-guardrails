@@ -1,6 +1,8 @@
 from __future__ import annotations
 import re
+from collections import defaultdict
 from dataclasses import dataclass
+from app.pii_scrubber import scrub as _scrub_pii
 
 @dataclass
 class FilterResult:
@@ -10,7 +12,6 @@ class FilterResult:
     blocked: bool
     block_reason: str
 
-# Patterns that should never appear in outputs
 BLOCK_PATTERNS = [
     {
         "name": "system_prompt_leak",
@@ -26,25 +27,10 @@ BLOCK_PATTERNS = [
     },
 ]
 
-# Patterns that get redacted from outputs
-REDACT_PATTERNS = [
-    {
-        "name": "email_in_output",
-        "pattern": r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b",
-        "replacement": "[EMAIL]",
-    },
-    {
-        "name": "api_key_in_output",
-        "pattern": r"\b(?:sk|pk|api|key)[-_][A-Za-z0-9]{20,}\b",
-        "replacement": "[API_KEY]",
-    },
-]
-
 def filter_output(text: str) -> FilterResult:
     flags = []
     filtered = text
 
-    # Check block patterns first
     for p in BLOCK_PATTERNS:
         if re.search(p["pattern"], filtered, flags=re.IGNORECASE):
             flags.append({"type": p["name"], "action": "block"})
@@ -56,17 +42,14 @@ def filter_output(text: str) -> FilterResult:
                 block_reason=p["reason"],
             )
 
-    # Apply redaction patterns
-    for p in REDACT_PATTERNS:
-        matches = re.findall(p["pattern"], filtered, flags=re.IGNORECASE)
-        if matches:
-            flags.append({"type": p["name"], "count": len(matches)})
-            filtered = re.sub(
-                p["pattern"],
-                p["replacement"],
-                filtered,
-                flags=re.IGNORECASE,
-            )
+    scrub_result = _scrub_pii(filtered)
+    if scrub_result.entities_found:
+        entity_counts: dict[str, int] = defaultdict(int)
+        for entity in scrub_result.entities_found:
+            entity_counts[entity["type"]] += 1
+        for entity_type, count in entity_counts.items():
+            flags.append({"type": entity_type, "count": count})
+        filtered = scrub_result.redacted
 
     return FilterResult(
         original=text,
