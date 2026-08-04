@@ -47,14 +47,16 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     # ── 1. Replay protection ───────────────────────────────
     if req.nonce and replay_protector.is_replay(req.nonce):
         _log_blocked(db, request_id, req.client_id, req.query,
-                     "replay_detected", [])
+                     "replay_detected", [],
+                     latency_ms=round((time.time() - t_start) * 1000, 2))
         raise HTTPException(409, "Duplicate request: nonce already seen")
 
     # ── 2. Rate limiting ──────────────────────────────────
     rl = rate_limiter.check(req.client_id, tier=req.tier)
     if not rl.allowed:
         _log_blocked(db, request_id, req.client_id, req.query,
-                     "rate_limit_exceeded", flags)
+                     "rate_limit_exceeded", flags,
+                     latency_ms=round((time.time() - t_start) * 1000, 2))
         raise HTTPException(
             status_code=429,
             detail={
@@ -67,7 +69,8 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     # ── 2. Input length check ──────────────────────────────
     if len(req.query.split()) > MAX_INPUT_TOKENS:
         _log_blocked(db, request_id, req.client_id, req.query,
-                     "input_too_long", flags)
+                     "input_too_long", flags,
+                     latency_ms=round((time.time() - t_start) * 1000, 2))
         raise HTTPException(400, "Input exceeds maximum token limit")
 
     # ── 3. Prompt injection detection ─────────────────────
@@ -84,7 +87,8 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
 
     if injection.is_injection:
         _log_blocked(db, request_id, req.client_id, req.query,
-                     "prompt_injection_blocked", flags)
+                     "prompt_injection_blocked", flags,
+                     latency_ms=round((time.time() - t_start) * 1000, 2))
         raise HTTPException(400, {
             "error":    "Request blocked: potential prompt injection detected",
             "patterns": injection.matched_patterns,
@@ -246,14 +250,20 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
 @app.get("/audit/stats", tags=["observability"])
 def audit_stats(db: Session = Depends(get_db)):
     logs = db.query(AuditLog).all()
-    if not logs:
-        return {"message": "No requests logged yet"}
     total = len(logs)
+    if not total:
+        return {
+            "total_requests": 0,
+            "blocked":        0,
+            "flagged":        0,
+            "block_rate":     0.0,
+            "avg_latency_ms": 0.0,
+            "flag_breakdown": {},
+        }
     blocked = sum(1 for l in logs if l.blocked)
     flagged = sum(1 for l in logs if l.flags)
-    avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
-    )
+    latency_values = [l.latency_ms for l in logs if l.latency_ms is not None]
+    avg_latency = round(sum(latency_values) / len(latency_values), 2) if latency_values else 0.0
     flag_types: dict[str, int] = {}
     for l in logs:
         for f in (l.flags or []):
@@ -319,7 +329,7 @@ def health():
 
 # ── Helpers ────────────────────────────────────────────────
 
-def _log_blocked(db, request_id, client_id, query, reason, flags):
+def _log_blocked(db, request_id, client_id, query, reason, flags, latency_ms=None):
     log = AuditLog(
         request_id=request_id,
         client_id=client_id,
@@ -327,6 +337,7 @@ def _log_blocked(db, request_id, client_id, query, reason, flags):
         blocked=True,
         block_reason=reason,
         flags=flags,
+        latency_ms=latency_ms,
     )
     db.add(log)
     db.commit()
