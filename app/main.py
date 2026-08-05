@@ -315,11 +315,51 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
             "flag_types": dict(b["flag_types"]),
         })
 
+    # Summary stats scoped to the window
+    total = len(logs)
+    blocked_count = sum(1 for l in logs if l.blocked)
+    flagged_count = sum(1 for l in logs if l.flags)
+    latency_values = [l.latency_ms for l in logs if l.latency_ms is not None]
+    avg_latency = round(sum(latency_values) / len(latency_values), 2) if latency_values else 0.0
+    flag_breakdown: dict[str, int] = {}
+    for l in logs:
+        for f in (l.flags or []):
+            t = f.get("type", "unknown")
+            flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+
+    # Recent flagged requests within the window
+    recent_flags = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .order_by(FlaggedRequest.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
-        "timeline":       timeline,
+        "total_requests": total,
+        "summary": {
+            "total_requests": total,
+            "blocked":        blocked_count,
+            "flagged":        flagged_count,
+            "block_rate":     round(blocked_count / total, 4) if total else 0.0,
+            "avg_latency_ms": avg_latency,
+            "flag_breakdown": flag_breakdown,
+        },
+        "recent_flagged": [
+            {
+                "request_id": f.request_id,
+                "client_id":  f.client_id,
+                "flag_type":  f.flag_type,
+                "severity":   f.severity,
+                "detail":     f.detail,
+                "created_at": str(f.created_at),
+            }
+            for f in recent_flags
+        ],
+        "timeline": timeline,
     }
 
 
