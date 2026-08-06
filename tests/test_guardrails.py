@@ -142,6 +142,111 @@ def test_rate_limiter_respects_tier():
     assert _rpm_for_tier("unknown_tier") >= 0
 
 
+# ── Rate limit enforcement integration tests ───────────────
+
+def test_rate_limit_returns_429_when_exceeded():
+    from unittest.mock import patch
+    from app.rate_limiter import RateLimitResult
+    denied = RateLimitResult(allowed=False, remaining=0, reset_in_seconds=45, limit=10, tier="free")
+    with patch("app.main.rate_limiter.check", return_value=denied):
+        r = client.post("/guard/query", json={
+            "query": "What is machine learning?",
+            "client_id": "rl_mock_test",
+        })
+    assert r.status_code == 429
+
+
+def test_rate_limit_429_response_schema():
+    from unittest.mock import patch
+    from app.rate_limiter import RateLimitResult
+    denied = RateLimitResult(allowed=False, remaining=0, reset_in_seconds=45, limit=10, tier="free")
+    with patch("app.main.rate_limiter.check", return_value=denied):
+        r = client.post("/guard/query", json={
+            "query": "What is machine learning?",
+            "client_id": "rl_schema_test",
+        })
+    assert r.status_code == 429
+    detail = r.json()["detail"]
+    assert "error" in detail
+    assert "limit" in detail
+    assert "reset_in_seconds" in detail
+    assert detail["limit"] == 10
+    assert detail["reset_in_seconds"] == 45
+
+
+def test_rate_limited_request_logged_in_audit():
+    from unittest.mock import patch
+    from app.rate_limiter import RateLimitResult
+    from app.database import get_db
+    from app.models import AuditLog
+    denied = RateLimitResult(allowed=False, remaining=0, reset_in_seconds=30, limit=5, tier="free")
+    with patch("app.main.rate_limiter.check", return_value=denied):
+        r = client.post("/guard/query", json={
+            "query": "What is the weather today?",
+            "client_id": "rl_audit_test",
+        })
+    assert r.status_code == 429
+    db = next(get_db())
+    log = (
+        db.query(AuditLog)
+        .filter(AuditLog.client_id == "rl_audit_test", AuditLog.block_reason == "rate_limit_exceeded")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert log is not None
+    assert log.blocked is True
+
+
+def test_rate_limited_request_has_latency_in_audit():
+    from unittest.mock import patch
+    from app.rate_limiter import RateLimitResult
+    from app.database import get_db
+    from app.models import AuditLog
+    denied = RateLimitResult(allowed=False, remaining=0, reset_in_seconds=30, limit=5, tier="free")
+    with patch("app.main.rate_limiter.check", return_value=denied):
+        client.post("/guard/query", json={
+            "query": "Tell me a joke",
+            "client_id": "rl_latency_test",
+        })
+    db = next(get_db())
+    log = (
+        db.query(AuditLog)
+        .filter(AuditLog.client_id == "rl_latency_test", AuditLog.block_reason == "rate_limit_exceeded")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert log is not None
+    assert log.latency_ms is not None
+    assert log.latency_ms >= 0.0
+
+
+def test_rate_limit_tier_reflected_in_429_limit():
+    from unittest.mock import patch
+    from app.rate_limiter import RateLimitResult
+    denied = RateLimitResult(allowed=False, remaining=0, reset_in_seconds=30, limit=500, tier="premium")
+    with patch("app.main.rate_limiter.check", return_value=denied):
+        r = client.post("/guard/query", json={
+            "query": "test query",
+            "client_id": "rl_tier_test",
+            "tier": "premium",
+        })
+    assert r.status_code == 429
+    assert r.json()["detail"]["limit"] == 500
+
+
+def test_guard_200_response_includes_rate_limit_meta():
+    r = client.post("/guard/query", json={
+        "query": "What is 2+2?",
+        "client_id": "rl_meta_test",
+    })
+    if r.status_code == 200:
+        meta = r.json()["meta"]
+        assert "rate_limit_remaining" in meta
+        assert isinstance(meta["rate_limit_remaining"], int)
+        assert "rate_limit_tier" in meta
+        assert isinstance(meta["rate_limit_tier"], str)
+
+
 def test_replay_protector_fresh_nonce():
     from app.replay_protector import replay_protector
     import uuid
