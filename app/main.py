@@ -204,21 +204,20 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [
         {
-            "request_id": l.request_id,
-            "client_id":  l.client_id,
-            "blocked":    l.blocked,
-            "flags":      l.flags,
-            "latency_ms": l.latency_ms,
-            "created_at": str(l.created_at),
+            "request_id":  l.request_id,
+            "client_id":   l.client_id,
+            "blocked":     l.blocked,
+            "block_reason": l.block_reason,
+            "flags":       l.flags,
+            "latency_ms":  l.latency_ms,
+            "created_at":  str(l.created_at),
         }
         for l in logs
     ]
