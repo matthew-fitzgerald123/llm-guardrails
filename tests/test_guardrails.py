@@ -610,3 +610,121 @@ def test_audit_stats_avg_latency_reflects_recorded_requests():
     data = r.json()
     assert isinstance(data["avg_latency_ms"], float)
     assert data["avg_latency_ms"] >= 0.0
+
+
+# ── Guard pipeline PII integration tests ──────────────────
+
+def test_guard_query_with_pii_sets_pii_scrubbed_meta():
+    """A query containing PII must return meta.pii_scrubbed=True in the 200 response."""
+    r = client.post("/guard/query", json={
+        "query": "My email is test@example.com, can you help?",
+        "client_id": "pii_meta_test",
+    })
+    assert r.status_code == 200
+    assert r.json()["meta"]["pii_scrubbed"] is True
+
+
+def test_guard_query_with_pii_includes_pii_flag_in_response():
+    """A query with PII must include a pii_scrubbed flag entry in the response flags list."""
+    r = client.post("/guard/query", json={
+        "query": "My SSN is 123-45-6789 for verification",
+        "client_id": "pii_flag_test",
+    })
+    assert r.status_code == 200
+    flag_types = {f["type"] for f in r.json()["flags"]}
+    assert "pii_scrubbed" in flag_types
+
+
+def test_guard_query_pii_records_input_redacted_in_audit():
+    """Audit log entry must have input_redacted set (with redaction tokens) when query had PII."""
+    from app.database import get_db
+    from app.models import AuditLog
+    r = client.post("/guard/query", json={
+        "query": "Call me at 555-987-6543 please",
+        "client_id": "pii_redacted_audit_test",
+    })
+    assert r.status_code == 200
+    db = next(get_db())
+    log = (
+        db.query(AuditLog)
+        .filter(AuditLog.client_id == "pii_redacted_audit_test")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert log is not None
+    assert log.input_redacted is not None
+    assert "[PHONE]" in log.input_redacted
+
+
+def test_guard_query_clean_input_has_no_input_redacted_in_audit():
+    """Audit log must not populate input_redacted when the query contained no PII."""
+    from app.database import get_db
+    from app.models import AuditLog
+    r = client.post("/guard/query", json={
+        "query": "What is the boiling point of water?",
+        "client_id": "no_pii_audit_test",
+    })
+    assert r.status_code == 200
+    db = next(get_db())
+    log = (
+        db.query(AuditLog)
+        .filter(AuditLog.client_id == "no_pii_audit_test")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert log is not None
+    assert log.input_redacted is None
+
+
+# ── Guard pipeline output filter integration tests ────────
+
+def test_guard_query_output_blocked_returns_blocked_true():
+    """When output filter blocks a response, the guard returns blocked=True in the 200 response."""
+    from unittest.mock import patch
+    from app.output_filter import FilterResult
+    blocked = FilterResult(
+        original="test",
+        filtered="[Response blocked by content filter]",
+        flags=[{"type": "system_prompt_leak", "action": "block"}],
+        blocked=True,
+        block_reason="Potential system prompt leak",
+    )
+    with patch("app.main.filter_output", return_value=blocked):
+        r = client.post("/guard/query", json={
+            "query": "What is machine learning?",
+            "client_id": "output_block_test",
+        })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["blocked"] is True
+    assert data["answer"] == "[Response blocked by content filter]"
+
+
+def test_guard_query_output_blocked_logged_in_audit():
+    """When output filter blocks a response, the audit log must record blocked=True with block_reason."""
+    from unittest.mock import patch
+    from app.output_filter import FilterResult
+    from app.database import get_db
+    from app.models import AuditLog
+    blocked = FilterResult(
+        original="test",
+        filtered="[Response blocked by content filter]",
+        flags=[{"type": "system_prompt_leak", "action": "block"}],
+        blocked=True,
+        block_reason="Potential system prompt leak",
+    )
+    with patch("app.main.filter_output", return_value=blocked):
+        client.post("/guard/query", json={
+            "query": "What is machine learning?",
+            "client_id": "output_block_audit_test",
+        })
+    db = next(get_db())
+    log = (
+        db.query(AuditLog)
+        .filter(AuditLog.client_id == "output_block_audit_test")
+        .order_by(AuditLog.created_at.desc())
+        .first()
+    )
+    assert log is not None
+    assert log.blocked is True
+    assert log.block_reason == "Potential system prompt leak"
