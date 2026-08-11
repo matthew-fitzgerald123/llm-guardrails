@@ -48,7 +48,7 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     if req.nonce and replay_protector.is_replay(req.nonce):
         _log_blocked(db, request_id, req.client_id, req.query,
                      "replay_detected", [])
-        raise HTTPException(409, "Duplicate request: nonce already seen")
+        raise HTTPException(409, detail={"error": "Duplicate request: nonce already seen", "request_id": request_id})
 
     # ── 2. Rate limiting ──────────────────────────────────
     rl = rate_limiter.check(req.client_id, tier=req.tier)
@@ -58,8 +58,9 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=429,
             detail={
-                "error":        "Rate limit exceeded",
-                "limit":        rl.limit,
+                "error":            "Rate limit exceeded",
+                "request_id":       request_id,
+                "limit":            rl.limit,
                 "reset_in_seconds": rl.reset_in_seconds,
             }
         )
@@ -68,7 +69,7 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     if len(req.query.split()) > MAX_INPUT_TOKENS:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "input_too_long", flags)
-        raise HTTPException(400, "Input exceeds maximum token limit")
+        raise HTTPException(400, detail={"error": "Input exceeds maximum token limit", "request_id": request_id})
 
     # ── 3. Prompt injection detection ─────────────────────
     injection = detect(req.query)
@@ -85,9 +86,10 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     if injection.is_injection:
         _log_blocked(db, request_id, req.client_id, req.query,
                      "prompt_injection_blocked", flags)
-        raise HTTPException(400, {
-            "error":    "Request blocked: potential prompt injection detected",
-            "patterns": injection.matched_patterns,
+        raise HTTPException(400, detail={
+            "error":      "Request blocked: potential prompt injection detected",
+            "request_id": request_id,
+            "patterns":   injection.matched_patterns,
         })
 
     # ── 4. PII scrubbing ───────────────────────────────────
@@ -204,13 +206,11 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.limit(limit).all()
     return [
         {
             "request_id": l.request_id,
@@ -224,13 +224,11 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(FlaggedRequest).order_by(FlaggedRequest.created_at.desc())
+    if client_id:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    flags = q.limit(limit).all()
     return [
         {
             "request_id": f.request_id,
