@@ -224,10 +224,20 @@ def audit_logs(limit: int = 20, client_id: Optional[str] = None, db: Session = D
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    flag_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     q = db.query(FlaggedRequest).order_by(FlaggedRequest.created_at.desc())
     if client_id:
         q = q.filter(FlaggedRequest.client_id == client_id)
+    if flag_type:
+        q = q.filter(FlaggedRequest.flag_type == flag_type)
+    if severity:
+        q = q.filter(FlaggedRequest.severity == severity)
     flags = q.limit(limit).all()
     return [
         {
