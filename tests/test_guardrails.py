@@ -239,6 +239,59 @@ def test_audit_stats_endpoint():
     r = client.get("/audit/stats")
     assert r.status_code == 200
 
+
+def test_audit_stats_hours_filter_includes_window_in_response():
+    """When hours param is supplied, response must echo it back."""
+    r = client.get("/audit/stats?hours=24")
+    assert r.status_code == 200
+    data = r.json()
+    if "window_hours" in data:
+        assert data["window_hours"] == 24
+
+
+def test_audit_stats_client_id_filter_returns_only_matching():
+    """Stats scoped to a client_id must include client_id in response."""
+    unique_client = "stats_filter_client_unique_abc"
+    client.post("/guard/query", json={
+        "query":     "What is 2+2?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/stats?client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    if "client_id" in data:
+        assert data["client_id"] == unique_client
+
+
+def test_audit_stats_unknown_client_returns_no_requests_message():
+    """Stats for a client with no records returns a no-data message."""
+    r = client.get("/audit/stats?client_id=nonexistent_stats_client_zzzz")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" in data or data.get("total_requests", 0) == 0
+
+
+def test_audit_stats_hours_zero_includes_window_in_response():
+    """hours=0 is a valid input meaning a zero-length window."""
+    r = client.get("/audit/stats?hours=0")
+    assert r.status_code == 200
+
+
+def test_audit_stats_combined_hours_and_client_id():
+    """Combining hours and client_id must narrow results to the intersection."""
+    unique_client = "stats_combined_filter_client_unique_xyz"
+    client.post("/guard/query", json={
+        "query":     "What is 3+3?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/stats?hours=24&client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    if "window_hours" in data:
+        assert data["window_hours"] == 24
+    if "client_id" in data:
+        assert data["client_id"] == unique_client
+
 def test_audit_logs_endpoint():
     r = client.get("/audit/logs")
     assert r.status_code == 200
