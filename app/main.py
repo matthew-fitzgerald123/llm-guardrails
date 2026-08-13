@@ -244,8 +244,20 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
+def audit_stats(
+    hours: Optional[int] = None,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+
+    q = db.query(AuditLog)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
     if not logs:
         return {"message": "No requests logged yet"}
     total = len(logs)
@@ -259,7 +271,7 @@ def audit_stats(db: Session = Depends(get_db)):
         for f in (l.flags or []):
             t = f.get("type", "unknown")
             flag_types[t] = flag_types.get(t, 0) + 1
-    return {
+    result: dict[str, Any] = {
         "total_requests": total,
         "blocked":        blocked,
         "flagged":        flagged,
@@ -267,6 +279,11 @@ def audit_stats(db: Session = Depends(get_db)):
         "avg_latency_ms": avg_latency,
         "flag_breakdown": flag_types,
     }
+    if hours is not None:
+        result["window_hours"] = hours
+    if client_id:
+        result["client_id"] = client_id
+    return result
 
 @app.get("/audit/dashboard", tags=["observability"])
 def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
