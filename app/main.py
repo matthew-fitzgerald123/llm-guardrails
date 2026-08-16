@@ -204,14 +204,23 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    return [
+def audit_logs(
+    limit: int = 20,
+    hours: Optional[int] = None,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+
+    q = db.query(AuditLog)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
+
+    entries = [
         {
             "request_id": l.request_id,
             "client_id":  l.client_id,
@@ -222,6 +231,16 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
         }
         for l in logs
     ]
+    # Preserve backward-compatible list when no filters are applied
+    if hours is None and client_id is None:
+        return entries
+    result: dict[str, Any] = {}
+    if hours is not None:
+        result["window_hours"] = hours
+    if client_id:
+        result["client_id"] = client_id
+    result["logs"] = entries
+    return result
 
 @app.get("/audit/flagged", tags=["observability"])
 def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
