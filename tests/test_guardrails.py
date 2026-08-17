@@ -303,6 +303,36 @@ def test_audit_logs_unknown_client_returns_empty_list():
     assert data["logs"] == []
 
 
+def test_audit_stats_hours_filter():
+    r = client.get("/audit/stats?hours=24")
+    assert r.status_code == 200
+    data = r.json()
+    assert "window_hours" in data
+    assert data["window_hours"] == 24
+
+
+def test_audit_stats_client_id_filter():
+    import uuid
+    unique_client = "stats_filter_" + str(uuid.uuid4())[:8]
+    client.post("/guard/query", json={
+        "query": "What is 2+2?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/stats?client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("client_id") == unique_client
+    assert data.get("total_requests", 0) >= 1
+
+
+def test_audit_stats_unknown_client_returns_empty_message():
+    r = client.get("/audit/stats?client_id=nonexistent_stats_client_zzzz")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" in data
+    assert data["client_id"] == "nonexistent_stats_client_zzzz"
+
+
 def test_audit_dashboard_endpoint():
     r = client.get("/audit/dashboard")
     assert r.status_code == 200
