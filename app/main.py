@@ -243,14 +243,23 @@ def audit_logs(
     return result
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    return [
+def flagged_requests(
+    limit: int = 20,
+    hours: Optional[int] = None,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+
+    q = db.query(FlaggedRequest)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(FlaggedRequest.created_at >= since)
+    if client_id:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    flags = q.order_by(FlaggedRequest.created_at.desc()).limit(limit).all()
+
+    entries = [
         {
             "request_id": f.request_id,
             "client_id":  f.client_id,
@@ -261,6 +270,15 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
         }
         for f in flags
     ]
+    if hours is None and client_id is None:
+        return entries
+    result: dict[str, Any] = {}
+    if hours is not None:
+        result["window_hours"] = hours
+    if client_id:
+        result["client_id"] = client_id
+    result["flagged"] = entries
+    return result
 
 @app.get("/audit/stats", tags=["observability"])
 def audit_stats(
