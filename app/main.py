@@ -314,8 +314,32 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok", "upstream": UPSTREAM_URL}
+def health(db: Session = Depends(get_db)):
+    from sqlalchemy import text as _sql_text
+
+    redis_status = "ok"
+    try:
+        rate_limiter.redis.ping()
+    except Exception:
+        redis_status = "error"
+
+    db_status = "ok"
+    try:
+        db.execute(_sql_text("SELECT 1"))
+    except Exception:
+        db_status = "error"
+
+    overall = "ok" if redis_status == "ok" and db_status == "ok" else "degraded"
+    status_code = 200 if overall == "ok" else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status":   overall,
+            "upstream": UPSTREAM_URL,
+            "redis":    redis_status,
+            "database": db_status,
+        },
+    )
 
 # ── Helpers ────────────────────────────────────────────────
 
