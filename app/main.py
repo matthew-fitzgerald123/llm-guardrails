@@ -246,9 +246,16 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
 @app.get("/audit/stats", tags=["observability"])
 def audit_stats(db: Session = Depends(get_db)):
     logs = db.query(AuditLog).all()
-    if not logs:
-        return {"message": "No requests logged yet"}
     total = len(logs)
+    if total == 0:
+        return {
+            "total_requests": 0,
+            "blocked": 0,
+            "flagged": 0,
+            "block_rate": 0.0,
+            "avg_latency_ms": 0.0,
+            "flag_breakdown": {},
+        }
     blocked = sum(1 for l in logs if l.blocked)
     flagged = sum(1 for l in logs if l.flags)
     avg_latency = round(
