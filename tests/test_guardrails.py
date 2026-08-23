@@ -235,9 +235,41 @@ def test_check_output_endpoint():
     assert r.status_code == 200
     assert r.json()["blocked"] is True
 
+_STATS_FIELDS = {"total_requests", "blocked", "flagged", "block_rate", "avg_latency_ms", "flag_breakdown"}
+
+
 def test_audit_stats_endpoint():
     r = client.get("/audit/stats")
     assert r.status_code == 200
+
+
+def test_audit_stats_always_returns_consistent_schema():
+    r = client.get("/audit/stats")
+    assert r.status_code == 200
+    data = r.json()
+    assert _STATS_FIELDS == set(data.keys()), f"Missing fields: {_STATS_FIELDS - set(data.keys())}"
+
+
+def test_audit_stats_block_rate_is_valid_fraction():
+    r = client.get("/audit/stats")
+    data = r.json()
+    assert isinstance(data["block_rate"], float)
+    assert 0.0 <= data["block_rate"] <= 1.0
+
+
+def test_audit_stats_flag_breakdown_is_dict():
+    r = client.get("/audit/stats")
+    data = r.json()
+    assert isinstance(data["flag_breakdown"], dict)
+
+
+def test_audit_stats_totals_are_non_negative():
+    r = client.get("/audit/stats")
+    data = r.json()
+    assert data["total_requests"] >= 0
+    assert data["blocked"] >= 0
+    assert data["flagged"] >= 0
+    assert data["avg_latency_ms"] >= 0.0
 
 def test_audit_logs_endpoint():
     r = client.get("/audit/logs")
