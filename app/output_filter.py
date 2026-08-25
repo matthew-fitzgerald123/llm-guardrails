@@ -20,7 +20,20 @@ BLOCK_PATTERNS = [
     },
     {
         "name": "harmful_code",
-        "pattern": r"(import\s+os\s*;\s*os\.system|subprocess\.call|eval\s*\(|exec\s*\()",
+        # Covers os.system, os.popen, os.execv*/execl*; subprocess.call/run/Popen;
+        # eval/exec/compile builtins; __import__ dynamic import; shell=True keyword
+        "pattern": (
+            r"(?:"
+            r"import\s+os\s*[;,\n]?\s*os\s*\.\s*(?:system|popen|execv[pe]?|execl[pe]?)\s*\("
+            r"|os\s*\.\s*(?:system|popen|execv[pe]?|execl[pe]?)\s*\("
+            r"|subprocess\s*\.\s*(?:call|run|Popen|check_output|check_call)\s*\("
+            r"|eval\s*\("
+            r"|exec\s*\("
+            r"|compile\s*\(.*\beval\b"
+            r"|__import__\s*\("
+            r"|shell\s*=\s*True"
+            r")"
+        ),
         "action": "block",
         "reason": "Potentially harmful code in output",
     },
