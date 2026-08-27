@@ -37,6 +37,25 @@ BLOCK_PATTERNS = [
         "action": "block",
         "reason": "Potentially harmful code in output",
     },
+    {
+        "name": "private_key_material",
+        # PEM-format private key blocks — RSA, EC, DSA, Ed25519, PKCS8, OpenSSH
+        "pattern": r"-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+|ENCRYPTED\s+)?PRIVATE\s+KEY-----",
+        "action": "block",
+        "reason": "Private key material in output",
+    },
+    {
+        "name": "credential_string",
+        # Env-var assignments for common secret names with a non-trivial value.
+        # Catches DATABASE_URL=..., SECRET_KEY=..., PASSWORD=..., DB_PASSWORD=..., etc.
+        "pattern": (
+            r"(?:DATABASE_URL|DB_URL|SECRET_KEY|API_SECRET|PRIVATE_KEY"
+            r"|PASSWORD|DB_PASSWORD|APP_SECRET|JWT_SECRET|AUTH_TOKEN"
+            r"|ACCESS_TOKEN|REFRESH_TOKEN)\s*=\s*\S{6,}"
+        ),
+        "action": "block",
+        "reason": "Credential string in output",
+    },
 ]
 
 # Patterns that get redacted from outputs
