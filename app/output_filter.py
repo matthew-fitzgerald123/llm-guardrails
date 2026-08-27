@@ -20,9 +20,41 @@ BLOCK_PATTERNS = [
     },
     {
         "name": "harmful_code",
-        "pattern": r"(import\s+os\s*;\s*os\.system|subprocess\.call|eval\s*\(|exec\s*\()",
+        # Covers os.system, os.popen, os.execv*/execl*; subprocess.call/run/Popen;
+        # eval/exec/compile builtins; __import__ dynamic import; shell=True keyword
+        "pattern": (
+            r"(?:"
+            r"import\s+os\s*[;,\n]?\s*os\s*\.\s*(?:system|popen|execv[pe]?|execl[pe]?)\s*\("
+            r"|os\s*\.\s*(?:system|popen|execv[pe]?|execl[pe]?)\s*\("
+            r"|subprocess\s*\.\s*(?:call|run|Popen|check_output|check_call)\s*\("
+            r"|eval\s*\("
+            r"|exec\s*\("
+            r"|compile\s*\(.*\beval\b"
+            r"|__import__\s*\("
+            r"|shell\s*=\s*True"
+            r")"
+        ),
         "action": "block",
         "reason": "Potentially harmful code in output",
+    },
+    {
+        "name": "private_key_material",
+        # PEM-format private key blocks — RSA, EC, DSA, Ed25519, PKCS8, OpenSSH
+        "pattern": r"-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+|ENCRYPTED\s+)?PRIVATE\s+KEY-----",
+        "action": "block",
+        "reason": "Private key material in output",
+    },
+    {
+        "name": "credential_string",
+        # Env-var assignments for common secret names with a non-trivial value.
+        # Catches DATABASE_URL=..., SECRET_KEY=..., PASSWORD=..., DB_PASSWORD=..., etc.
+        "pattern": (
+            r"(?:DATABASE_URL|DB_URL|SECRET_KEY|API_SECRET|PRIVATE_KEY"
+            r"|PASSWORD|DB_PASSWORD|APP_SECRET|JWT_SECRET|AUTH_TOKEN"
+            r"|ACCESS_TOKEN|REFRESH_TOKEN)\s*=\s*\S{6,}"
+        ),
+        "action": "block",
+        "reason": "Credential string in output",
     },
 ]
 

@@ -327,3 +327,52 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Output filter: credential exfiltration ────────────────────────────────────
+
+def test_filter_blocks_private_key_material():
+    text = "Here is your key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA..."
+    r = filter_output(text)
+    assert r.blocked is True
+    assert "private" in r.block_reason.lower() or "key" in r.block_reason.lower()
+
+
+def test_filter_blocks_openssh_private_key():
+    text = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA"
+    r = filter_output(text)
+    assert r.blocked is True
+
+
+def test_filter_blocks_database_url_with_password():
+    text = "Connect using DATABASE_URL=postgresql://admin:s3cr3tpass@db.internal/prod"
+    r = filter_output(text)
+    assert r.blocked is True
+    assert "credential" in r.block_reason.lower()
+
+
+def test_filter_blocks_secret_key_env_var():
+    text = "Set SECRET_KEY=xK9mP2qRnTvBwYzLdJhFcUsEaGiNoX3p to start the server"
+    r = filter_output(text)
+    assert r.blocked is True
+
+
+def test_check_output_endpoint_blocks_private_key():
+    r = client.post("/check/output", json={
+        "text": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEA"
+    })
+    assert r.status_code == 200
+    assert r.json()["blocked"] is True
+
+
+def test_check_output_endpoint_blocks_credential_string():
+    r = client.post("/check/output", json={
+        "text": "DATABASE_URL=mysql://root:password123@localhost/mydb"
+    })
+    assert r.status_code == 200
+    assert r.json()["blocked"] is True
+
+
+def test_filter_clean_output_not_blocked_by_credential_patterns():
+    r = filter_output("You can set a password in the admin panel. Passwords should be strong.")
+    assert r.blocked is False
