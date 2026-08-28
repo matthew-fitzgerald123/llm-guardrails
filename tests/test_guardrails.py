@@ -239,6 +239,35 @@ def test_audit_stats_endpoint():
     r = client.get("/audit/stats")
     assert r.status_code == 200
 
+
+def test_audit_stats_consistent_schema_when_empty():
+    """Stats endpoint must return the same six fields regardless of row count."""
+    r = client.get("/audit/stats")
+    assert r.status_code == 200
+    data = r.json()
+    for field in ("total_requests", "blocked", "flagged", "block_rate", "avg_latency_ms", "flag_breakdown"):
+        assert field in data, f"expected field '{field}' in /audit/stats response"
+    assert "message" not in data
+
+
+def test_audit_stats_never_returns_message_key():
+    """The legacy {'message': 'No requests logged yet'} shape must not appear."""
+    r = client.get("/audit/stats")
+    assert "message" not in r.json()
+
+
+def test_audit_stats_avg_latency_is_non_negative():
+    """avg_latency_ms must be a non-negative float computed over non-null latencies."""
+    # Trigger at least one request so there is a latency-bearing row.
+    client.post("/guard/query", json={
+        "query": "What is 2+2?",
+        "client_id": "latency_stats_test",
+    })
+    r = client.get("/audit/stats")
+    data = r.json()
+    assert isinstance(data["avg_latency_ms"], float)
+    assert data["avg_latency_ms"] >= 0.0
+
 def test_audit_logs_endpoint():
     r = client.get("/audit/logs")
     assert r.status_code == 200
