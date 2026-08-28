@@ -246,14 +246,22 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
 @app.get("/audit/stats", tags=["observability"])
 def audit_stats(db: Session = Depends(get_db)):
     logs = db.query(AuditLog).all()
-    if not logs:
-        return {"message": "No requests logged yet"}
     total = len(logs)
+    if total == 0:
+        return {
+            "total_requests": 0,
+            "blocked":        0,
+            "flagged":        0,
+            "block_rate":     0.0,
+            "avg_latency_ms": 0.0,
+            "flag_breakdown": {},
+        }
     blocked = sum(1 for l in logs if l.blocked)
     flagged = sum(1 for l in logs if l.flags)
-    avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
-    )
+    # Only average over requests that recorded a latency value; blocked requests
+    # may not have one, so dividing by total would silently understate the average.
+    latency_values = [l.latency_ms for l in logs if l.latency_ms is not None]
+    avg_latency = round(sum(latency_values) / len(latency_values), 2) if latency_values else 0.0
     flag_types: dict[str, int] = {}
     for l in logs:
         for f in (l.flags or []):
