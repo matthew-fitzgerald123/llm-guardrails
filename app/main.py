@@ -204,13 +204,15 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [
         {
             "request_id": l.request_id,
@@ -224,13 +226,21 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    flag_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(FlaggedRequest)
+    if client_id:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    if flag_type:
+        q = q.filter(FlaggedRequest.flag_type == flag_type)
+    if severity:
+        q = q.filter(FlaggedRequest.severity == severity)
+    flags = q.order_by(FlaggedRequest.created_at.desc()).limit(limit).all()
     return [
         {
             "request_id": f.request_id,
@@ -244,16 +254,27 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
-    if not logs:
-        return {"message": "No requests logged yet"}
+def audit_stats(client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(AuditLog)
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
     total = len(logs)
+    if total == 0:
+        return {
+            "total_requests": 0,
+            "blocked":        0,
+            "flagged":        0,
+            "block_rate":     0.0,
+            "avg_latency_ms": 0.0,
+            "flag_breakdown": {},
+        }
     blocked = sum(1 for l in logs if l.blocked)
     flagged = sum(1 for l in logs if l.flags)
-    avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
-    )
+    # Only average over requests that recorded a latency value; blocked requests
+    # may not have one, so dividing by total would silently understate the average.
+    latency_values = [l.latency_ms for l in logs if l.latency_ms is not None]
+    avg_latency = round(sum(latency_values) / len(latency_values), 2) if latency_values else 0.0
     flag_types: dict[str, int] = {}
     for l in logs:
         for f in (l.flags or []):
