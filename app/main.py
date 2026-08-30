@@ -290,13 +290,19 @@ def audit_stats(client_id: Optional[str] = None, db: Session = Depends(get_db)):
     }
 
 @app.get("/audit/dashboard", tags=["observability"])
-def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+def audit_dashboard(
+    hours: int = 24,
+    bucket_minutes: int = 60,
+    recent_flagged_limit: int = 20,
+    db: Session = Depends(get_db),
+):
     from datetime import datetime, timedelta
     from collections import defaultdict
 
     since = datetime.utcnow() - timedelta(hours=hours)
     logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
 
+    # ── Timeline bucketing ─────────────────────────────────
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
     })
@@ -326,11 +332,63 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
             "flag_types": dict(b["flag_types"]),
         })
 
+    # ── Window-scoped stats summary ────────────────────────
+    total = len(logs)
+    if total == 0:
+        stats = {
+            "total_requests": 0,
+            "blocked":        0,
+            "flagged":        0,
+            "block_rate":     0.0,
+            "avg_latency_ms": 0.0,
+            "flag_breakdown": {},
+        }
+    else:
+        blocked = sum(1 for l in logs if l.blocked)
+        flagged = sum(1 for l in logs if l.flags)
+        latency_values = [l.latency_ms for l in logs if l.latency_ms is not None]
+        avg_latency = round(sum(latency_values) / len(latency_values), 2) if latency_values else 0.0
+        flag_breakdown: dict[str, int] = {}
+        for l in logs:
+            for f in (l.flags or []):
+                t = f.get("type", "unknown")
+                flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+        stats = {
+            "total_requests": total,
+            "blocked":        blocked,
+            "flagged":        flagged,
+            "block_rate":     round(blocked / total, 4),
+            "avg_latency_ms": avg_latency,
+            "flag_breakdown": flag_breakdown,
+        }
+
+    # ── Recent flagged requests within window ──────────────
+    flagged_rows = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .order_by(FlaggedRequest.created_at.desc())
+        .limit(recent_flagged_limit)
+        .all()
+    )
+    recent_flagged = [
+        {
+            "request_id": f.request_id,
+            "client_id":  f.client_id,
+            "flag_type":  f.flag_type,
+            "severity":   f.severity,
+            "detail":     f.detail,
+            "created_at": str(f.created_at),
+        }
+        for f in flagged_rows
+    ]
+
     return {
-        "window_hours":   hours,
-        "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
-        "timeline":       timeline,
+        "window_hours":        hours,
+        "bucket_minutes":      bucket_minutes,
+        "total_requests":      total,
+        "stats":               stats,
+        "recent_flagged":      recent_flagged,
+        "timeline":            timeline,
     }
 
 
