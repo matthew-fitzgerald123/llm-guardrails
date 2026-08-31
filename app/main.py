@@ -215,12 +215,13 @@ def audit_logs(
     logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
     return [
         {
-            "request_id": l.request_id,
-            "client_id":  l.client_id,
-            "blocked":    l.blocked,
-            "flags":      l.flags,
-            "latency_ms": l.latency_ms,
-            "created_at": str(l.created_at),
+            "request_id":  l.request_id,
+            "client_id":   l.client_id,
+            "blocked":     l.blocked,
+            "block_reason": l.block_reason,
+            "flags":       l.flags,
+            "latency_ms":  l.latency_ms,
+            "created_at":  str(l.created_at),
         }
         for l in logs
     ]
