@@ -295,13 +295,17 @@ def audit_dashboard(
     hours: int = 24,
     bucket_minutes: int = 60,
     recent_flagged_limit: int = 20,
+    client_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     from datetime import datetime, timedelta
     from collections import defaultdict
 
     since = datetime.utcnow() - timedelta(hours=hours)
-    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+    log_q = db.query(AuditLog).filter(AuditLog.created_at >= since)
+    if client_id:
+        log_q = log_q.filter(AuditLog.client_id == client_id)
+    logs = log_q.all()
 
     # ── Timeline bucketing ─────────────────────────────────
     buckets: dict[str, dict] = defaultdict(lambda: {
@@ -364,9 +368,14 @@ def audit_dashboard(
         }
 
     # ── Recent flagged requests within window ──────────────
-    flagged_rows = (
+    flagged_q = (
         db.query(FlaggedRequest)
         .filter(FlaggedRequest.created_at >= since)
+    )
+    if client_id:
+        flagged_q = flagged_q.filter(FlaggedRequest.client_id == client_id)
+    flagged_rows = (
+        flagged_q
         .order_by(FlaggedRequest.created_at.desc())
         .limit(recent_flagged_limit)
         .all()
