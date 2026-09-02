@@ -485,6 +485,49 @@ def test_audit_stats_filter_nonexistent_client_returns_zeros():
     assert data["avg_latency_ms"] == 0.0
 
 
+# ── Audit stats time-window filter ────────────────────────
+
+
+def test_audit_stats_accepts_hours_param():
+    """stats endpoint must accept hours without error and return the standard schema."""
+    r = client.get("/audit/stats?hours=24")
+    assert r.status_code == 200
+    data = r.json()
+    for field in ("total_requests", "blocked", "flagged", "block_rate", "avg_latency_ms", "flag_breakdown"):
+        assert field in data, f"stats missing field '{field}'"
+
+
+def test_audit_stats_hours_includes_recent_request():
+    """A request made just now must appear in stats scoped to hours=1."""
+    unique_client = "stats_hours_window_client_abc"
+    client.post("/guard/query", json={
+        "query": "What is 2+2?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/stats?hours=1&client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_requests"] >= 1
+
+
+def test_audit_stats_zero_hours_returns_empty():
+    """hours=0 means since right now, so no requests should fall within that window."""
+    r = client.get("/audit/stats?hours=0")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_requests"] == 0
+    assert data["avg_latency_ms"] == 0.0
+
+
+def test_audit_stats_hours_consistent_schema_when_empty():
+    """stats with hours param must return the same six fields even when the window is empty."""
+    r = client.get("/audit/stats?hours=0")
+    assert r.status_code == 200
+    data = r.json()
+    for field in ("total_requests", "blocked", "flagged", "block_rate", "avg_latency_ms", "flag_breakdown"):
+        assert field in data, f"stats with hours param missing field '{field}'"
+
+
 # ── Audit logs block_reason field ─────────────────────────
 
 def test_audit_logs_response_includes_block_reason_field():

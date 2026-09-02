@@ -255,8 +255,16 @@ def flagged_requests(
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(client_id: Optional[str] = None, db: Session = Depends(get_db)):
+def audit_stats(
+    client_id: Optional[str] = None,
+    hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
     q = db.query(AuditLog)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
     if client_id:
         q = q.filter(AuditLog.client_id == client_id)
     logs = q.all()
