@@ -207,9 +207,14 @@ def check_output(req: CheckReq):
 def audit_logs(
     limit: int = 20,
     client_id: Optional[str] = None,
+    hours: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
+    from datetime import datetime, timedelta
     q = db.query(AuditLog)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(AuditLog.created_at >= since)
     if client_id:
         q = q.filter(AuditLog.client_id == client_id)
     logs = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
@@ -232,9 +237,14 @@ def flagged_requests(
     client_id: Optional[str] = None,
     flag_type: Optional[str] = None,
     severity: Optional[str] = None,
+    hours: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
+    from datetime import datetime, timedelta
     q = db.query(FlaggedRequest)
+    if hours is not None:
+        since = datetime.utcnow() - timedelta(hours=hours)
+        q = q.filter(FlaggedRequest.created_at >= since)
     if client_id:
         q = q.filter(FlaggedRequest.client_id == client_id)
     if flag_type:
