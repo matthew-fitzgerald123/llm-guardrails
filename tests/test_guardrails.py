@@ -700,3 +700,46 @@ def test_audit_flagged_hours_combined_with_client_id():
     assert r.status_code == 200
     entries = r.json()
     assert all(e["client_id"] == unique_client for e in entries)
+
+
+# ── Audit logs query field ─────────────────────────────────
+
+def test_audit_logs_entries_include_query_field():
+    """Every audit log entry must include a query field."""
+    r = client.get("/audit/logs?limit=5")
+    assert r.status_code == 200
+    entries = r.json()
+    for entry in entries:
+        assert "query" in entry, "audit log entry missing 'query' field"
+        assert entry["query"] is not None
+
+
+def test_audit_logs_clean_request_query_matches_input():
+    """For a clean (no-PII) request the query field must match the original input."""
+    unique_client = "query_field_clean_client_abc"
+    query_text = "What is the boiling point of water?"
+    client.post("/guard/query", json={
+        "query": query_text,
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/logs?client_id={unique_client}&limit=5")
+    assert r.status_code == 200
+    entries = r.json()
+    assert entries, "expected at least one log entry"
+    assert entries[0]["query"] == query_text
+
+
+def test_audit_logs_pii_request_query_is_redacted():
+    """For a request containing PII the query field must return the scrubbed version."""
+    unique_client = "query_field_pii_client_xyz"
+    client.post("/guard/query", json={
+        "query": "My email is secret@example.com, what is machine learning?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/logs?client_id={unique_client}&limit=5")
+    assert r.status_code == 200
+    entries = r.json()
+    assert entries, "expected at least one log entry"
+    query_val = entries[0]["query"]
+    assert "[EMAIL]" in query_val, "PII email should be redacted in query field"
+    assert "secret@example.com" not in query_val, "raw email must not appear in query field"

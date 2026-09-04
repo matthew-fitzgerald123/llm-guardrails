@@ -227,6 +227,7 @@ def audit_logs(
             "flags":       l.flags,
             "latency_ms":  l.latency_ms,
             "created_at":  str(l.created_at),
+            "query":       l.input_redacted if l.input_redacted else l.input_text,
         }
         for l in logs
     ]
