@@ -204,33 +204,40 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    if client_id is not None:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.limit(limit).all()
     return [
         {
-            "request_id": l.request_id,
-            "client_id":  l.client_id,
-            "blocked":    l.blocked,
-            "flags":      l.flags,
-            "latency_ms": l.latency_ms,
-            "created_at": str(l.created_at),
+            "request_id":   l.request_id,
+            "client_id":    l.client_id,
+            "blocked":      l.blocked,
+            "block_reason": l.block_reason,
+            "flags":        l.flags,
+            "latency_ms":   l.latency_ms,
+            "created_at":   str(l.created_at),
+            "query":        l.input_redacted if l.input_redacted else l.input_text,
+            "output_text":  l.output_text,
         }
         for l in logs
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(FlaggedRequest).order_by(FlaggedRequest.created_at.desc())
+    if client_id is not None:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    flags = q.limit(limit).all()
     return [
         {
             "request_id": f.request_id,
@@ -320,10 +327,13 @@ def health():
 # ── Helpers ────────────────────────────────────────────────
 
 def _log_blocked(db, request_id, client_id, query, reason, flags):
+    scrub_result = scrub(query)
+    safe_text = scrub_result.redacted if scrub_result.entities_found else query
     log = AuditLog(
         request_id=request_id,
         client_id=client_id,
-        input_text=query[:500],
+        input_text=safe_text[:500],
+        input_redacted=scrub_result.redacted[:500] if scrub_result.entities_found else None,
         blocked=True,
         block_reason=reason,
         flags=flags,
