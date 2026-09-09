@@ -204,13 +204,15 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    if client_id is not None:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.limit(limit).all()
     return [
         {
             "request_id":   l.request_id,
@@ -221,18 +223,21 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
             "latency_ms":   l.latency_ms,
             "created_at":   str(l.created_at),
             "query":        l.input_redacted if l.input_redacted else l.input_text,
+            "output_text":  l.output_text,
         }
         for l in logs
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(FlaggedRequest).order_by(FlaggedRequest.created_at.desc())
+    if client_id is not None:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    flags = q.limit(limit).all()
     return [
         {
             "request_id": f.request_id,
