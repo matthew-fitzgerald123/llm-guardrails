@@ -251,8 +251,14 @@ def flagged_requests(
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
+def audit_stats(
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog)
+    if client_id is not None:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
     if not logs:
         return {"message": "No requests logged yet"}
     total = len(logs)
@@ -273,15 +279,19 @@ def audit_stats(db: Session = Depends(get_db)):
         "block_rate":     round(blocked / total, 4),
         "avg_latency_ms": avg_latency,
         "flag_breakdown": flag_types,
+        "client_id":      client_id,
     }
 
 @app.get("/audit/dashboard", tags=["observability"])
-def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, client_id: Optional[str] = None, db: Session = Depends(get_db)):
     from datetime import datetime, timedelta
     from collections import defaultdict
 
     since = datetime.utcnow() - timedelta(hours=hours)
-    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+    q = db.query(AuditLog).filter(AuditLog.created_at >= since)
+    if client_id is not None:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
 
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
@@ -316,6 +326,7 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
         "total_requests": len(logs),
+        "client_id":      client_id,
         "timeline":       timeline,
     }
 

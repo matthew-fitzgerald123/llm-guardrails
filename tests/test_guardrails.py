@@ -469,3 +469,83 @@ def test_audit_flagged_client_id_filter_returns_only_matching():
         assert e["client_id"] == unique_client, (
             f"filter returned entry from wrong client: {e['client_id']}"
         )
+
+
+# ── Audit stats: client_id filter ─────────────────────────
+
+def test_audit_stats_unfiltered_returns_aggregated_data():
+    """Unfiltered /audit/stats must return numeric aggregate fields."""
+    r = client.get("/audit/stats")
+    assert r.status_code == 200
+    data = r.json()
+    if "message" not in data:
+        assert "total_requests" in data
+        assert "blocked" in data
+        assert "block_rate" in data
+        assert "avg_latency_ms" in data
+        assert "flag_breakdown" in data
+
+
+def test_audit_stats_client_id_filter_scopes_results():
+    """client_id param on /audit/stats must scope aggregation to that client only."""
+    unique_client = "stats_filter_client_abc123"
+    client.post("/guard/query", json={
+        "query": "What is the boiling point of water?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/stats?client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" not in data, "expected stats data, not 'no requests' message"
+    assert data["total_requests"] >= 1
+    assert data.get("client_id") == unique_client
+
+
+def test_audit_stats_client_id_filter_excludes_other_clients():
+    """Stats for a nonexistent client must return the empty-data message."""
+    r = client.get("/audit/stats?client_id=nonexistent_client_zzz_99999")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" in data, (
+        "expected 'no requests' message for unknown client, got stats"
+    )
+
+
+def test_audit_stats_client_id_filter_returns_client_id_in_response():
+    """The client_id filter value must be echoed back in the response."""
+    unique_client = "stats_echo_client_xyz789"
+    client.post("/guard/query", json={
+        "query": "What is recursion?",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/stats?client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    if "message" not in data:
+        assert data.get("client_id") == unique_client
+
+
+# ── Audit dashboard: client_id filter ─────────────────────
+
+def test_audit_dashboard_client_id_filter_scopes_timeline():
+    """client_id param on /audit/dashboard must scope the timeline to that client."""
+    unique_client = "dashboard_filter_client_def456"
+    client.post("/guard/query", json={
+        "query": "Explain gradient descent.",
+        "client_id": unique_client,
+    })
+    r = client.get(f"/audit/dashboard?client_id={unique_client}")
+    assert r.status_code == 200
+    data = r.json()
+    assert "timeline" in data
+    assert data.get("client_id") == unique_client
+    assert data["total_requests"] >= 1
+
+
+def test_audit_dashboard_unknown_client_returns_empty_timeline():
+    """Dashboard for a nonexistent client must return zero total_requests."""
+    r = client.get("/audit/dashboard?client_id=ghost_client_zzz_00000")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total_requests"] == 0
+    assert data["timeline"] == []
