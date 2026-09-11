@@ -549,3 +549,69 @@ def test_audit_dashboard_unknown_client_returns_empty_timeline():
     data = r.json()
     assert data["total_requests"] == 0
     assert data["timeline"] == []
+
+
+# ── Output filter: full PII scrubbing ─────────────────────
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("Your SSN is 123-45-6789 according to our records")
+    assert "[SSN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("Your card ending 4111 1111 1111 1111 was charged")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Please call us at 555-123-4567 for support")
+    assert "[PHONE]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Wire funds to GB29 NWBK 6016 1331 9268 19 by Friday")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ip_address_in_output():
+    r = filter_output("The server IP is 192.168.1.100 — keep this internal")
+    assert "[IP_ADDRESS]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_clean_output_has_no_pii_flags():
+    r = filter_output("The capital of France is Paris.")
+    pii_flags = [f for f in r.flags if f.get("type", "").startswith("pii_")]
+    assert pii_flags == []
+    assert r.blocked is False
+
+
+def test_check_output_endpoint_redacts_ssn():
+    r = client.post("/check/output", json={
+        "text": "Your SSN on file is 123-45-6789"
+    })
+    assert r.status_code == 200
+    assert "[SSN]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
+def test_check_output_endpoint_redacts_credit_card():
+    r = client.post("/check/output", json={
+        "text": "Billing info: 4111 1111 1111 1111"
+    })
+    assert r.status_code == 200
+    assert "[CREDIT_CARD]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
+
+
+def test_check_output_endpoint_redacts_phone():
+    r = client.post("/check/output", json={
+        "text": "Callback number on account: 555-123-4567"
+    })
+    assert r.status_code == 200
+    assert "[PHONE]" in r.json()["filtered"]
+    assert r.json()["blocked"] is False
