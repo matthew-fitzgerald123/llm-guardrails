@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 from dataclasses import dataclass
+from app.pii_scrubber import scrub
 
 @dataclass
 class FilterResult:
@@ -26,19 +27,6 @@ BLOCK_PATTERNS = [
     },
 ]
 
-# Patterns that get redacted from outputs
-REDACT_PATTERNS = [
-    {
-        "name": "email_in_output",
-        "pattern": r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b",
-        "replacement": "[EMAIL]",
-    },
-    {
-        "name": "api_key_in_output",
-        "pattern": r"\b(?:sk|pk|api|key)[-_][A-Za-z0-9]{20,}\b",
-        "replacement": "[API_KEY]",
-    },
-]
 
 def filter_output(text: str) -> FilterResult:
     flags = []
@@ -56,17 +44,12 @@ def filter_output(text: str) -> FilterResult:
                 block_reason=p["reason"],
             )
 
-    # Apply redaction patterns
-    for p in REDACT_PATTERNS:
-        matches = re.findall(p["pattern"], filtered, flags=re.IGNORECASE)
-        if matches:
-            flags.append({"type": p["name"], "count": len(matches)})
-            filtered = re.sub(
-                p["pattern"],
-                p["replacement"],
-                filtered,
-                flags=re.IGNORECASE,
-            )
+    # Apply full PII scrubbing to the output (same rules as input pipeline)
+    scrub_result = scrub(filtered)
+    if scrub_result.entities_found:
+        for entity in scrub_result.entities_found:
+            flags.append({"type": f"pii_{entity['type']}_in_output", "count": 1})
+        filtered = scrub_result.redacted
 
     return FilterResult(
         original=text,
