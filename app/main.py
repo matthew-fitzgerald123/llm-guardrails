@@ -204,33 +204,40 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    if client_id is not None:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.limit(limit).all()
     return [
         {
-            "request_id": l.request_id,
-            "client_id":  l.client_id,
-            "blocked":    l.blocked,
-            "flags":      l.flags,
-            "latency_ms": l.latency_ms,
-            "created_at": str(l.created_at),
+            "request_id":   l.request_id,
+            "client_id":    l.client_id,
+            "blocked":      l.blocked,
+            "block_reason": l.block_reason,
+            "flags":        l.flags,
+            "latency_ms":   l.latency_ms,
+            "created_at":   str(l.created_at),
+            "query":        l.input_redacted if l.input_redacted else l.input_text,
+            "output_text":  l.output_text,
         }
         for l in logs
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(
+    limit: int = 20,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(FlaggedRequest).order_by(FlaggedRequest.created_at.desc())
+    if client_id is not None:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    flags = q.limit(limit).all()
     return [
         {
             "request_id": f.request_id,
@@ -244,8 +251,14 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
+def audit_stats(
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(AuditLog)
+    if client_id is not None:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
     if not logs:
         return {"message": "No requests logged yet"}
     total = len(logs)
@@ -266,15 +279,19 @@ def audit_stats(db: Session = Depends(get_db)):
         "block_rate":     round(blocked / total, 4),
         "avg_latency_ms": avg_latency,
         "flag_breakdown": flag_types,
+        "client_id":      client_id,
     }
 
 @app.get("/audit/dashboard", tags=["observability"])
-def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, client_id: Optional[str] = None, db: Session = Depends(get_db)):
     from datetime import datetime, timedelta
     from collections import defaultdict
 
     since = datetime.utcnow() - timedelta(hours=hours)
-    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+    q = db.query(AuditLog).filter(AuditLog.created_at >= since)
+    if client_id is not None:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.all()
 
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
@@ -305,10 +322,48 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
             "flag_types": dict(b["flag_types"]),
         })
 
+    # Aggregate stats over the window
+    total_count = len(logs)
+    blocked_count = sum(1 for l in logs if l.blocked)
+    latencies = [l.latency_ms for l in logs if l.latency_ms is not None]
+    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
+    flag_breakdown: dict[str, int] = {}
+    for log in logs:
+        for f in (log.flags or []):
+            t = f.get("type", "unknown")
+            flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+
+    stats = {
+        "total_requests": total_count,
+        "blocked":        blocked_count,
+        "block_rate":     round(blocked_count / total_count, 4) if total_count else 0.0,
+        "avg_latency_ms": avg_latency,
+        "flag_breakdown": flag_breakdown,
+    }
+
+    # Recent flagged requests from FlaggedRequest table within the same window
+    fq = db.query(FlaggedRequest).filter(FlaggedRequest.created_at >= since)
+    if client_id is not None:
+        fq = fq.filter(FlaggedRequest.client_id == client_id)
+    recent_flagged = [
+        {
+            "request_id": f.request_id,
+            "client_id":  f.client_id,
+            "flag_type":  f.flag_type,
+            "severity":   f.severity,
+            "detail":     f.detail,
+            "created_at": str(f.created_at),
+        }
+        for f in fq.order_by(FlaggedRequest.created_at.desc()).limit(20).all()
+    ]
+
     return {
         "window_hours":   hours,
         "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
+        "total_requests": total_count,
+        "client_id":      client_id,
+        "stats":          stats,
+        "recent_flagged": recent_flagged,
         "timeline":       timeline,
     }
 
@@ -320,10 +375,13 @@ def health():
 # ── Helpers ────────────────────────────────────────────────
 
 def _log_blocked(db, request_id, client_id, query, reason, flags):
+    scrub_result = scrub(query)
+    safe_text = scrub_result.redacted if scrub_result.entities_found else query
     log = AuditLog(
         request_id=request_id,
         client_id=client_id,
-        input_text=query[:500],
+        input_text=safe_text[:500],
+        input_redacted=scrub_result.redacted[:500] if scrub_result.entities_found else None,
         blocked=True,
         block_reason=reason,
         flags=flags,
