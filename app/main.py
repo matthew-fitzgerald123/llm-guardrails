@@ -204,13 +204,17 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def audit_logs(
+    limit: int = 20,
+    since_hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+    q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    if since_hours is not None:
+        since = datetime.utcnow() - timedelta(hours=since_hours)
+        q = q.filter(AuditLog.created_at >= since)
+    logs = q.limit(limit).all()
     return [
         {
             "request_id": l.request_id,
@@ -224,13 +228,17 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(
+    limit: int = 20,
+    since_hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+    q = db.query(FlaggedRequest).order_by(FlaggedRequest.created_at.desc())
+    if since_hours is not None:
+        since = datetime.utcnow() - timedelta(hours=since_hours)
+        q = q.filter(FlaggedRequest.created_at >= since)
+    flags = q.limit(limit).all()
     return [
         {
             "request_id": f.request_id,
