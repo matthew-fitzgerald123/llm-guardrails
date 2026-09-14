@@ -432,3 +432,51 @@ def test_audit_flagged_since_hours_zero_returns_empty():
     r = client.get("/audit/flagged?since_hours=0")
     assert r.status_code == 200
     assert r.json() == []
+
+
+# ── Audit stats: since_hours time-window filter ────────────
+
+def test_audit_stats_since_hours_param_accepted():
+    """since_hours param on /audit/stats must be accepted and return 200."""
+    r = client.get("/audit/stats?since_hours=24")
+    assert r.status_code == 200
+
+
+def test_audit_stats_window_hours_in_response():
+    """Response must echo back the requested window_hours value."""
+    r = client.get("/audit/stats?since_hours=6")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("window_hours") == 6
+
+
+def test_audit_stats_since_hours_reflects_recent_request():
+    """A request made just now must be counted in a 1-hour stats window."""
+    unique_client = "since_hours_stats_test_ccc"
+    client.post("/guard/query", json={
+        "query": "What is the speed of light?",
+        "client_id": unique_client,
+    })
+    r = client.get("/audit/stats?since_hours=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_requests" in data
+    assert data["total_requests"] >= 1
+
+
+def test_audit_stats_since_hours_zero_returns_empty_message():
+    """since_hours=0 means within the last 0 hours; no entries expected."""
+    r = client.get("/audit/stats?since_hours=0")
+    assert r.status_code == 200
+    data = r.json()
+    assert "message" in data
+    assert data.get("window_hours") == 0
+
+
+def test_audit_stats_without_since_hours_returns_aggregate():
+    """Omitting since_hours returns all-time stats (no window_hours or None)."""
+    r = client.get("/audit/stats")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_requests" in data or "message" in data
+    assert data.get("window_hours") is None

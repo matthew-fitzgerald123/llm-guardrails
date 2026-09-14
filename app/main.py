@@ -252,10 +252,18 @@ def flagged_requests(
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
+def audit_stats(
+    since_hours: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timedelta
+    q = db.query(AuditLog)
+    if since_hours is not None:
+        since = datetime.utcnow() - timedelta(hours=since_hours)
+        q = q.filter(AuditLog.created_at >= since)
+    logs = q.all()
     if not logs:
-        return {"message": "No requests logged yet"}
+        return {"message": "No requests logged yet", "window_hours": since_hours}
     total = len(logs)
     blocked = sum(1 for l in logs if l.blocked)
     flagged = sum(1 for l in logs if l.flags)
@@ -274,6 +282,7 @@ def audit_stats(db: Session = Depends(get_db)):
         "block_rate":     round(blocked / total, 4),
         "avg_latency_ms": avg_latency,
         "flag_breakdown": flag_types,
+        "window_hours":   since_hours,
     }
 
 @app.get("/audit/dashboard", tags=["observability"])
