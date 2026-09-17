@@ -15,10 +15,14 @@ class ReplayProtector:
         )
 
     def check_and_store(self, nonce: str) -> bool:
-        """Return True if nonce is fresh. False means it was seen before (replay)."""
-        key = f"nonce:{nonce}"
-        stored = self.redis.set(key, 1, ex=NONCE_TTL, nx=True)
-        return stored is not None
+        """Return True if nonce is fresh. False means it was seen before (replay).
+        Returns True (treat as fresh) when Redis is unavailable."""
+        try:
+            key = f"nonce:{nonce}"
+            stored = self.redis.set(key, 1, ex=NONCE_TTL, nx=True)
+            return stored is not None
+        except Exception:
+            return True
 
     def is_replay(self, nonce: str) -> bool:
         return not self.check_and_store(nonce)

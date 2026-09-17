@@ -327,3 +327,79 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Redis fault tolerance ──────────────────────────────────
+
+def test_rate_limiter_fails_open_when_redis_down():
+    """When Redis is unavailable, rate limiter must allow requests rather than returning a 500."""
+    from unittest.mock import patch
+    import redis as redis_lib
+    from app.rate_limiter import rate_limiter
+
+    with patch.object(rate_limiter.redis, "pipeline", side_effect=redis_lib.ConnectionError("Redis down")):
+        result = rate_limiter.check("any_client", tier="free")
+    assert result.allowed is True
+    assert result.redis_available is False
+
+
+def test_replay_protector_fails_open_when_redis_down():
+    """When Redis is unavailable, replay protector must treat every nonce as fresh."""
+    from unittest.mock import patch
+    import redis as redis_lib
+    import uuid
+    from app.replay_protector import replay_protector
+
+    nonce = str(uuid.uuid4())
+    with patch.object(replay_protector.redis, "set", side_effect=redis_lib.ConnectionError("Redis down")):
+        result = replay_protector.check_and_store(nonce)
+    assert result is True
+
+
+def test_replay_protector_is_replay_fails_open_when_redis_down():
+    """is_replay must return False (not a replay) when Redis is unavailable."""
+    from unittest.mock import patch
+    import redis as redis_lib
+    import uuid
+    from app.replay_protector import replay_protector
+
+    nonce = str(uuid.uuid4())
+    with patch.object(replay_protector.redis, "set", side_effect=redis_lib.ConnectionError("Redis down")):
+        result = replay_protector.is_replay(nonce)
+    assert result is False
+
+
+def test_guard_returns_200_when_redis_down():
+    """A guard request must not return 500 when Redis is down; it should proceed and flag the degradation."""
+    from unittest.mock import patch
+    import redis as redis_lib
+    from app.rate_limiter import rate_limiter
+    from app.replay_protector import replay_protector
+
+    with (
+        patch.object(rate_limiter.redis, "pipeline", side_effect=redis_lib.ConnectionError("Redis down")),
+        patch.object(replay_protector.redis, "set", side_effect=redis_lib.ConnectionError("Redis down")),
+    ):
+        r = client.post("/guard/query", json={
+            "query": "What is 2 + 2?",
+            "client_id": "redis_down_test_client",
+            "nonce": "test-nonce-redis-down",
+        })
+    assert r.status_code in (200, 503), f"Expected 200 or 503, got {r.status_code}"
+    if r.status_code == 200:
+        data = r.json()
+        assert "meta" in data
+        assert data["meta"]["redis_available"] is False
+
+
+def test_guard_meta_includes_redis_available_field():
+    """Successful guard responses must always include redis_available in meta."""
+    r = client.post("/guard/query", json={
+        "query": "What is machine learning?",
+        "client_id": "redis_meta_test_client",
+    })
+    assert r.status_code in (200, 429, 503)
+    if r.status_code == 200:
+        data = r.json()
+        assert "redis_available" in data["meta"]
+        assert isinstance(data["meta"]["redis_available"], bool)
