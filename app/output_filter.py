@@ -38,6 +38,26 @@ REDACT_PATTERNS = [
         "pattern": r"\b(?:sk|pk|api|key)[-_][A-Za-z0-9]{20,}\b",
         "replacement": "[API_KEY]",
     },
+    {
+        "name": "credit_card_in_output",
+        "pattern": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
+        "replacement": "[CREDIT_CARD]",
+    },
+    {
+        "name": "ssn_in_output",
+        "pattern": r"\b\d{3}-\d{2}-\d{4}\b",
+        "replacement": "[SSN]",
+    },
+    {
+        "name": "iban_in_output",
+        "pattern": r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Za-z0-9]{4}){2,7}(?:[ ]?[A-Za-z0-9]{1,3})?\b",
+        "replacement": "[IBAN]",
+    },
+    {
+        "name": "phone_in_output",
+        "pattern": r"\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
+        "replacement": "[PHONE]",
+    },
 ]
 
 def filter_output(text: str) -> FilterResult:

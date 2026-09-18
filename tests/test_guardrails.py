@@ -403,3 +403,57 @@ def test_guard_meta_includes_redis_available_field():
         data = r.json()
         assert "redis_available" in data["meta"]
         assert isinstance(data["meta"]["redis_available"], bool)
+
+
+# ── Output filter: PII redaction in responses ──────────────
+
+def test_filter_redacts_credit_card_in_output():
+    r = filter_output("Your card ending in 4111 1111 1111 1111 was charged.")
+    assert "[CREDIT_CARD]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_ssn_in_output():
+    r = filter_output("The SSN on file is 123-45-6789.")
+    assert "[SSN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_iban_in_output():
+    r = filter_output("Transfer to GB29 NWBK 6016 1331 9268 19 was successful.")
+    assert "[IBAN]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_phone_in_output():
+    r = filter_output("Call support at 555-123-4567 for assistance.")
+    assert "[PHONE]" in r.filtered
+    assert r.blocked is False
+
+
+def test_check_output_endpoint_redacts_credit_card():
+    r = client.post("/check/output", json={
+        "text": "Your card 4111 1111 1111 1111 will be billed."
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["blocked"] is False
+    assert "[CREDIT_CARD]" in data["filtered"]
+
+
+def test_check_output_endpoint_redacts_ssn():
+    r = client.post("/check/output", json={
+        "text": "Verification code matches SSN 123-45-6789 on record."
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert "[SSN]" in data["filtered"]
+
+
+def test_filter_clean_output_unchanged():
+    """Ensure non-PII clean output is not modified by the new patterns."""
+    text = "The model achieved 95.3% accuracy on the test set."
+    r = filter_output(text)
+    assert r.filtered == text
+    assert r.blocked is False
+    assert r.flags == []
