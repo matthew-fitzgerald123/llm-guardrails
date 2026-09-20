@@ -457,3 +457,51 @@ def test_filter_clean_output_unchanged():
     assert r.filtered == text
     assert r.blocked is False
     assert r.flags == []
+
+
+# ── Output filter: ip_address and dob redaction ────────────
+
+def test_filter_redacts_ip_in_output():
+    r = filter_output("The server is running at 192.168.1.100 on port 8080.")
+    assert "[IP_ADDRESS]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_dob_in_output():
+    r = filter_output("Patient dob: 04/15/1985 is on record.")
+    assert "[DOB]" in r.filtered
+    assert r.blocked is False
+
+
+def test_filter_redacts_dob_date_of_birth_label():
+    r = filter_output("The customer's date of birth: 12/01/1990 was verified.")
+    assert "[DOB]" in r.filtered
+    assert r.blocked is False
+
+
+def test_check_output_endpoint_redacts_ip():
+    r = client.post("/check/output", json={
+        "text": "Connect to the internal host at 10.0.0.55 for access."
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["blocked"] is False
+    assert "[IP_ADDRESS]" in data["filtered"]
+
+
+def test_check_output_endpoint_redacts_dob():
+    r = client.post("/check/output", json={
+        "text": "Date of birth: 07/04/1776 has been confirmed."
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["blocked"] is False
+    assert "[DOB]" in data["filtered"]
+
+
+def test_filter_plain_date_not_redacted():
+    """Bare dates without a dob/born/date-of-birth label must not be redacted."""
+    text = "The conference is scheduled for 12/01/2025."
+    r = filter_output(text)
+    assert "[DOB]" not in r.filtered
+    assert r.blocked is False
