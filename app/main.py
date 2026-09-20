@@ -204,10 +204,11 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
+def audit_logs(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
     logs = (
         db.query(AuditLog)
         .order_by(AuditLog.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -224,10 +225,11 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
+def flagged_requests(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
     flags = (
         db.query(FlaggedRequest)
         .order_by(FlaggedRequest.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
