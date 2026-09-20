@@ -156,6 +156,7 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
             "rate_limit_remaining": rl.remaining,
             "rate_limit_tier":      rl.tier,
             "latency_ms":           latency,
+            "redis_available":      rl.redis_available,
         },
     }
 
