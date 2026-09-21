@@ -204,10 +204,11 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
+def audit_logs(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
     logs = (
         db.query(AuditLog)
         .order_by(AuditLog.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -224,10 +225,11 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
+def flagged_requests(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
     flags = (
         db.query(FlaggedRequest)
         .order_by(FlaggedRequest.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -245,26 +247,39 @@ def flagged_requests(limit: int = 20, db: Session = Depends(get_db)):
 
 @app.get("/audit/stats", tags=["observability"])
 def audit_stats(db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).all()
-    if not logs:
+    from sqlalchemy import func
+
+    total, blocked_count, avg_latency = db.query(
+        func.count(AuditLog.id),
+        func.count(AuditLog.id).filter(AuditLog.blocked == True),
+        func.avg(AuditLog.latency_ms),
+    ).one()
+
+    if not total:
         return {"message": "No requests logged yet"}
-    total = len(logs)
-    blocked = sum(1 for l in logs if l.blocked)
-    flagged = sum(1 for l in logs if l.flags)
-    avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
+
+    # Only pull the flags column to compute the per-type breakdown
+    flags_rows = (
+        db.query(AuditLog.flags)
+        .filter(AuditLog.flags.isnot(None))
+        .all()
     )
+    flagged = 0
     flag_types: dict[str, int] = {}
-    for l in logs:
-        for f in (l.flags or []):
+    for (flags,) in flags_rows:
+        if not flags:
+            continue
+        flagged += 1
+        for f in flags:
             t = f.get("type", "unknown")
             flag_types[t] = flag_types.get(t, 0) + 1
+
     return {
         "total_requests": total,
-        "blocked":        blocked,
+        "blocked":        blocked_count or 0,
         "flagged":        flagged,
-        "block_rate":     round(blocked / total, 4),
-        "avg_latency_ms": avg_latency,
+        "block_rate":     round((blocked_count or 0) / total, 4),
+        "avg_latency_ms": round(float(avg_latency or 0), 2),
         "flag_breakdown": flag_types,
     }
 
