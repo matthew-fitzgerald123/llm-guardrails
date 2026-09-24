@@ -204,14 +204,11 @@ def check_output(req: CheckReq):
 # ── Observability ─────────────────────────────────────────
 
 @app.get("/audit/logs", tags=["observability"])
-def audit_logs(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
-    logs = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+def audit_logs(limit: int = 20, offset: int = 0, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    if client_id:
+        q = q.filter(AuditLog.client_id == client_id)
+    logs = q.offset(offset).limit(limit).all()
     return [
         {
             "request_id": l.request_id,
@@ -225,14 +222,11 @@ def audit_logs(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
     ]
 
 @app.get("/audit/flagged", tags=["observability"])
-def flagged_requests(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
-    flags = (
-        db.query(FlaggedRequest)
-        .order_by(FlaggedRequest.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+def flagged_requests(limit: int = 20, offset: int = 0, client_id: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(FlaggedRequest).order_by(FlaggedRequest.created_at.desc())
+    if client_id:
+        q = q.filter(FlaggedRequest.client_id == client_id)
+    flags = q.offset(offset).limit(limit).all()
     return [
         {
             "request_id": f.request_id,
@@ -246,10 +240,14 @@ def flagged_requests(limit: int = 20, offset: int = 0, db: Session = Depends(get
     ]
 
 @app.get("/audit/stats", tags=["observability"])
-def audit_stats(db: Session = Depends(get_db)):
+def audit_stats(client_id: Optional[str] = None, db: Session = Depends(get_db)):
     from sqlalchemy import func
 
-    total, blocked_count, avg_latency = db.query(
+    base_q = db.query(AuditLog)
+    if client_id:
+        base_q = base_q.filter(AuditLog.client_id == client_id)
+
+    total, blocked_count, avg_latency = base_q.with_entities(
         func.count(AuditLog.id),
         func.count(AuditLog.id).filter(AuditLog.blocked == True),
         func.avg(AuditLog.latency_ms),
@@ -259,14 +257,10 @@ def audit_stats(db: Session = Depends(get_db)):
         return {"message": "No requests logged yet"}
 
     # Only pull the flags column to compute the per-type breakdown
-    flags_rows = (
-        db.query(AuditLog.flags)
-        .filter(AuditLog.flags.isnot(None))
-        .all()
-    )
+    flags_q = base_q.with_entities(AuditLog.flags).filter(AuditLog.flags.isnot(None))
     flagged = 0
     flag_types: dict[str, int] = {}
-    for (flags,) in flags_rows:
+    for (flags,) in flags_q.all():
         if not flags:
             continue
         flagged += 1
