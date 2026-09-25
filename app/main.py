@@ -278,12 +278,21 @@ def audit_stats(client_id: Optional[str] = None, db: Session = Depends(get_db)):
     }
 
 @app.get("/audit/dashboard", tags=["observability"])
-def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Depends(get_db)):
+def audit_dashboard(
+    hours: int = 24,
+    bucket_minutes: int = 60,
+    client_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     from datetime import datetime, timedelta
     from collections import defaultdict
 
     since = datetime.utcnow() - timedelta(hours=hours)
-    logs = db.query(AuditLog).filter(AuditLog.created_at >= since).all()
+
+    logs_q = db.query(AuditLog).filter(AuditLog.created_at >= since)
+    if client_id:
+        logs_q = logs_q.filter(AuditLog.client_id == client_id)
+    logs = logs_q.all()
 
     buckets: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "blocked": 0, "flagged": 0, "flag_types": defaultdict(int)
@@ -314,11 +323,37 @@ def audit_dashboard(hours: int = 24, bucket_minutes: int = 60, db: Session = Dep
             "flag_types": dict(b["flag_types"]),
         })
 
+    flagged_q = (
+        db.query(FlaggedRequest)
+        .filter(FlaggedRequest.created_at >= since)
+        .order_by(FlaggedRequest.created_at.desc())
+        .limit(20)
+    )
+    if client_id:
+        flagged_q = (
+            db.query(FlaggedRequest)
+            .filter(FlaggedRequest.created_at >= since, FlaggedRequest.client_id == client_id)
+            .order_by(FlaggedRequest.created_at.desc())
+            .limit(20)
+        )
+    recent_flagged = [
+        {
+            "request_id": f.request_id,
+            "client_id":  f.client_id,
+            "flag_type":  f.flag_type,
+            "severity":   f.severity,
+            "detail":     f.detail,
+            "created_at": str(f.created_at),
+        }
+        for f in flagged_q.all()
+    ]
+
     return {
-        "window_hours":   hours,
-        "bucket_minutes": bucket_minutes,
-        "total_requests": len(logs),
-        "timeline":       timeline,
+        "window_hours":    hours,
+        "bucket_minutes":  bucket_minutes,
+        "total_requests":  len(logs),
+        "timeline":        timeline,
+        "recent_flagged":  recent_flagged,
     }
 
 
