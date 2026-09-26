@@ -348,10 +348,29 @@ def audit_dashboard(
         for f in flagged_q.all()
     ]
 
+    total_requests = len(logs)
+    total_blocked = sum(1 for l in logs if l.blocked)
+    flagged_logs = [l for l in logs if l.flags]
+    total_flagged = len(flagged_logs)
+    latencies = [l.latency_ms for l in logs if l.latency_ms is not None]
+    avg_latency_ms = round(sum(latencies) / len(latencies), 2) if latencies else 0.0
+    flag_breakdown: dict[str, int] = {}
+    for l in flagged_logs:
+        for f in l.flags:
+            t = f.get("type", "unknown")
+            flag_breakdown[t] = flag_breakdown.get(t, 0) + 1
+
     return {
         "window_hours":    hours,
         "bucket_minutes":  bucket_minutes,
-        "total_requests":  len(logs),
+        "total_requests":  total_requests,
+        "stats": {
+            "total_blocked":  total_blocked,
+            "total_flagged":  total_flagged,
+            "block_rate":     round(total_blocked / total_requests, 4) if total_requests else 0.0,
+            "avg_latency_ms": avg_latency_ms,
+            "flag_breakdown": flag_breakdown,
+        },
         "timeline":        timeline,
         "recent_flagged":  recent_flagged,
     }
