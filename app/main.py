@@ -134,7 +134,7 @@ async def guarded_query(req: GuardedRequest, db: Session = Depends(get_db)):
     log = AuditLog(
         request_id=request_id,
         client_id=req.client_id,
-        input_text=req.query[:500],
+        input_text=scrub_result.redacted[:500],
         output_text=filter_result.filtered[:500],
         input_redacted=clean_query[:500] if scrub_result.entities_found else None,
         blocked=filter_result.blocked,
@@ -213,12 +213,13 @@ def audit_logs(limit: int = 20, db: Session = Depends(get_db)):
     )
     return [
         {
-            "request_id": l.request_id,
-            "client_id":  l.client_id,
-            "blocked":    l.blocked,
-            "flags":      l.flags,
-            "latency_ms": l.latency_ms,
-            "created_at": str(l.created_at),
+            "request_id":  l.request_id,
+            "client_id":   l.client_id,
+            "blocked":     l.blocked,
+            "block_reason": l.block_reason,
+            "flags":       l.flags,
+            "latency_ms":  l.latency_ms,
+            "created_at":  str(l.created_at),
         }
         for l in logs
     ]
@@ -320,13 +321,21 @@ def health():
 # ── Helpers ────────────────────────────────────────────────
 
 def _log_blocked(db, request_id, client_id, query, reason, flags):
+    scrub_result = scrub(query)
+    entry_flags = list(flags)
+    if scrub_result.entities_found:
+        entry_flags.append({
+            "type":     "pii_scrubbed",
+            "entities": scrub_result.entities_found,
+        })
     log = AuditLog(
         request_id=request_id,
         client_id=client_id,
-        input_text=query[:500],
+        input_text=scrub_result.redacted[:500],
+        input_redacted=scrub_result.redacted[:500] if scrub_result.entities_found else None,
         blocked=True,
         block_reason=reason,
-        flags=flags,
+        flags=entry_flags,
     )
     db.add(log)
     db.commit()
