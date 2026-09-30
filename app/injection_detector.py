@@ -1,7 +1,47 @@
 from __future__ import annotations
 import re
+import unicodedata
 from dataclasses import dataclass
 from app.semantic_detector import semantic_check
+
+# Cyrillic and Greek characters that are visually indistinguishable from
+# their Latin equivalents, used to craft homoglyph-based evasion payloads.
+_CONFUSABLE_MAP = str.maketrans({
+    # Cyrillic lowercase
+    "а": "a",  # а → a
+    "е": "e",  # е → e
+    "о": "o",  # о → o
+    "р": "p",  # р → p
+    "с": "c",  # с → c
+    "х": "x",  # х → x
+    "у": "y",  # у → y
+    "і": "i",  # і → i
+    # Cyrillic uppercase
+    "А": "A",  # А → A
+    "Е": "E",  # Е → E
+    "О": "O",  # О → O
+    "Р": "P",  # Р → P
+    "С": "C",  # С → C
+    "Х": "X",  # Х → X
+    "У": "Y",  # У → Y
+    "І": "I",  # І → I
+    # Greek lookalikes
+    "α": "a",  # α → a
+    "ε": "e",  # ε → e
+    "ο": "o",  # ο → o
+    "ρ": "p",  # ρ → p
+    "ν": "v",  # ν → v
+})
+
+
+def _normalize_confusables(text: str) -> str:
+    """Return text with Unicode confusables mapped to ASCII equivalents.
+
+    Applies NFKC normalization first (handles fullwidth chars and ligatures),
+    then substitutes Cyrillic/Greek homoglyphs.  Used to detect evasion
+    attempts that replace ASCII letters with visually identical Unicode chars.
+    """
+    return unicodedata.normalize("NFKC", text).translate(_CONFUSABLE_MAP)
 
 @dataclass
 class DetectionResult:
@@ -69,11 +109,21 @@ FLAG_THRESHOLD  = 0.4
 def detect(text: str) -> DetectionResult:
     matched = []
     total_weight = 0.0
+    normalized = _normalize_confusables(text)
+    found_unicode_evasion = False
 
     for p in INJECTION_PATTERNS:
-        if re.search(p["pattern"], text, flags=re.IGNORECASE):
+        orig_hit = bool(re.search(p["pattern"], text, flags=re.IGNORECASE))
+        norm_hit = bool(re.search(p["pattern"], normalized, flags=re.IGNORECASE))
+        if orig_hit or norm_hit:
             matched.append(p["name"])
             total_weight += p["weight"]
+            if norm_hit and not orig_hit:
+                found_unicode_evasion = True
+
+    if found_unicode_evasion:
+        matched.append("unicode_evasion")
+        total_weight += 0.5
 
     # Semantic second layer: catches paraphrased injections that evade regex
     sem = semantic_check(text)
