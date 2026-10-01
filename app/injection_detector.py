@@ -4,6 +4,20 @@ import unicodedata
 from dataclasses import dataclass
 from app.semantic_detector import semantic_check
 
+# Zero-width and invisible Unicode characters that can be inserted between
+# letters to break regex patterns without changing the visible text.
+_INVISIBLE_CHARS = frozenset([
+    "​",  # ZERO WIDTH SPACE
+    "‌",  # ZERO WIDTH NON-JOINER
+    "‍",  # ZERO WIDTH JOINER
+    "‎",  # LEFT-TO-RIGHT MARK
+    "‏",  # RIGHT-TO-LEFT MARK
+    "﻿",  # ZERO WIDTH NO-BREAK SPACE (BOM)
+    "­",  # SOFT HYPHEN
+    "⁠",  # WORD JOINER
+    "᠎",  # MONGOLIAN VOWEL SEPARATOR
+])
+
 # Cyrillic and Greek characters that are visually indistinguishable from
 # their Latin equivalents, used to craft homoglyph-based evasion payloads.
 _CONFUSABLE_MAP = str.maketrans({
@@ -34,6 +48,11 @@ _CONFUSABLE_MAP = str.maketrans({
 })
 
 
+def _strip_invisible(text: str) -> str:
+    """Remove zero-width and invisible Unicode characters from text."""
+    return "".join(c for c in text if c not in _INVISIBLE_CHARS)
+
+
 def _normalize_confusables(text: str) -> str:
     """Return text with Unicode confusables mapped to ASCII equivalents.
 
@@ -42,6 +61,11 @@ def _normalize_confusables(text: str) -> str:
     attempts that replace ASCII letters with visually identical Unicode chars.
     """
     return unicodedata.normalize("NFKC", text).translate(_CONFUSABLE_MAP)
+
+
+def _has_invisible_chars(text: str) -> bool:
+    """Return True if text contains any zero-width or invisible Unicode chars."""
+    return any(c in _INVISIBLE_CHARS for c in text)
 
 @dataclass
 class DetectionResult:
@@ -109,20 +133,31 @@ FLAG_THRESHOLD  = 0.4
 def detect(text: str) -> DetectionResult:
     matched = []
     total_weight = 0.0
-    normalized = _normalize_confusables(text)
+    stripped = _strip_invisible(text)
+    normalized = _normalize_confusables(stripped)
     found_unicode_evasion = False
+    found_zero_width_evasion = False
 
     for p in INJECTION_PATTERNS:
-        orig_hit = bool(re.search(p["pattern"], text, flags=re.IGNORECASE))
-        norm_hit = bool(re.search(p["pattern"], normalized, flags=re.IGNORECASE))
+        orig_hit    = bool(re.search(p["pattern"], text,       flags=re.IGNORECASE))
+        stripped_hit = bool(re.search(p["pattern"], stripped,   flags=re.IGNORECASE))
+        norm_hit    = bool(re.search(p["pattern"], normalized, flags=re.IGNORECASE))
         if orig_hit or norm_hit:
             matched.append(p["name"])
             total_weight += p["weight"]
-            if norm_hit and not orig_hit:
-                found_unicode_evasion = True
+            if not orig_hit:
+                # Pattern only fires after some normalization step
+                if stripped_hit:
+                    found_zero_width_evasion = True
+                else:
+                    found_unicode_evasion = True
 
     if found_unicode_evasion:
         matched.append("unicode_evasion")
+        total_weight += 0.5
+
+    if found_zero_width_evasion:
+        matched.append("zero_width_evasion")
         total_weight += 0.5
 
     # Semantic second layer: catches paraphrased injections that evade regex
