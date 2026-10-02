@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import pytest
 from fastapi.testclient import TestClient
 import sys
@@ -571,3 +572,63 @@ def test_detect_clean_text_with_zero_width_but_no_injection():
     r = detect(payload)
     assert "zero_width_evasion" not in r.matched_patterns
     assert r.is_injection is False
+
+
+# ── Configurable injection thresholds ─────────────────────
+
+def test_injection_block_threshold_default():
+    """Default BLOCK_THRESHOLD is 0.7; encoding_evasion (weight 0.6) should not block."""
+    r = detect("the payload uses base64 encoding to evade filters")
+    assert r.is_injection is False
+    assert r.confidence == pytest.approx(0.6)
+
+
+def test_injection_flag_threshold_default():
+    """Default FLAG_THRESHOLD is 0.4; encoding_evasion (0.6) should be medium severity."""
+    r = detect("the payload uses base64 encoding to evade filters")
+    assert r.severity == "medium"
+
+
+def test_injection_block_threshold_lowered():
+    """Lowering BLOCK_THRESHOLD below the match weight must cause blocking."""
+    import app.injection_detector as inj
+    original = inj.BLOCK_THRESHOLD
+    try:
+        inj.BLOCK_THRESHOLD = 0.5
+        r = detect("the payload uses base64 encoding to evade filters")
+        assert r.is_injection is True
+        assert r.severity == "high"
+    finally:
+        inj.BLOCK_THRESHOLD = original
+
+
+def test_injection_block_threshold_raised():
+    """Raising BLOCK_THRESHOLD above encoding_evasion weight (0.6) must prevent blocking."""
+    import app.injection_detector as inj
+    original = inj.BLOCK_THRESHOLD
+    try:
+        inj.BLOCK_THRESHOLD = 0.65
+        r = detect("the payload uses base64 encoding to evade filters")
+        assert r.is_injection is False
+        assert r.confidence == pytest.approx(0.6)
+    finally:
+        inj.BLOCK_THRESHOLD = original
+
+
+def test_injection_flag_threshold_raised():
+    """Raising FLAG_THRESHOLD above match weight must drop severity to low."""
+    import app.injection_detector as inj
+    original = inj.FLAG_THRESHOLD
+    try:
+        inj.FLAG_THRESHOLD = 0.65
+        r = detect("the payload uses base64 encoding to evade filters")
+        assert r.severity == "low"
+    finally:
+        inj.FLAG_THRESHOLD = original
+
+
+def test_injection_thresholds_reflect_env_defaults():
+    """Module constants must match their documented env-var defaults."""
+    import app.injection_detector as inj
+    assert inj.BLOCK_THRESHOLD == float(os.getenv("INJECTION_BLOCK_THRESHOLD", "0.7"))
+    assert inj.FLAG_THRESHOLD == float(os.getenv("INJECTION_FLAG_THRESHOLD", "0.4"))

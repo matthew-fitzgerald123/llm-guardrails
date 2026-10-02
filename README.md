@@ -40,6 +40,8 @@ brew services start redis
 | `RATE_LIMIT_DEFAULT_TIER` | `free` | Tier applied when a request doesn't specify one |
 | `NONCE_TTL_SECONDS` | `300` | Replay-protection window for request nonces |
 | `SEMANTIC_INJECTION_THRESHOLD` | `0.75` | Cosine similarity threshold for semantic injection detection |
+| `INJECTION_BLOCK_THRESHOLD` | `0.7` | Cumulative pattern-weight score above which a request is blocked |
+| `INJECTION_FLAG_THRESHOLD` | `0.4` | Cumulative pattern-weight score above which a request is flagged |
 
 ## Running
 

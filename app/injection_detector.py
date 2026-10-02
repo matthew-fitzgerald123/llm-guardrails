@@ -1,8 +1,12 @@
 from __future__ import annotations
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
+from dotenv import load_dotenv
 from app.semantic_detector import semantic_check
+
+load_dotenv()
 
 # Zero-width and invisible Unicode characters that can be inserted between
 # letters to break regex patterns without changing the visible text.
@@ -127,8 +131,8 @@ INJECTION_PATTERNS = [
     },
 ]
 
-BLOCK_THRESHOLD = 0.7
-FLAG_THRESHOLD  = 0.4
+BLOCK_THRESHOLD = float(os.getenv("INJECTION_BLOCK_THRESHOLD", "0.7"))
+FLAG_THRESHOLD  = float(os.getenv("INJECTION_FLAG_THRESHOLD", "0.4"))
 
 def detect(text: str) -> DetectionResult:
     matched = []
