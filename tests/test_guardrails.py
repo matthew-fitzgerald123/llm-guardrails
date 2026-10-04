@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import pytest
 from fastapi.testclient import TestClient
 import sys
@@ -327,3 +328,142 @@ def test_audit_flagged_entries_have_expected_fields():
         assert "request_id" in first
         assert "flag_type" in first
         assert "severity" in first
+
+
+# ── Rate-limit tier configuration ─────────────────────────
+
+def test_parse_tiers_standard_format():
+    """_parse_tiers correctly splits 'name:limit' pairs."""
+    import app.rate_limiter as _rl
+    original_env = os.environ.get("RATE_LIMIT_TIERS")
+    try:
+        os.environ["RATE_LIMIT_TIERS"] = "free:20,standard:100,premium:500"
+        parsed = _rl._parse_tiers()
+        assert parsed == {"free": 20, "standard": 100, "premium": 500}
+    finally:
+        if original_env is None:
+            os.environ.pop("RATE_LIMIT_TIERS", None)
+        else:
+            os.environ["RATE_LIMIT_TIERS"] = original_env
+
+
+def test_parse_tiers_empty_string():
+    """_parse_tiers returns an empty dict when env var is empty."""
+    import app.rate_limiter as _rl
+    original_env = os.environ.get("RATE_LIMIT_TIERS")
+    try:
+        os.environ["RATE_LIMIT_TIERS"] = ""
+        parsed = _rl._parse_tiers()
+        assert parsed == {}
+    finally:
+        if original_env is None:
+            os.environ.pop("RATE_LIMIT_TIERS", None)
+        else:
+            os.environ["RATE_LIMIT_TIERS"] = original_env
+
+
+def test_parse_tiers_ignores_malformed_entries():
+    """_parse_tiers skips entries that have no colon or non-integer limits."""
+    import app.rate_limiter as _rl
+    original_env = os.environ.get("RATE_LIMIT_TIERS")
+    try:
+        os.environ["RATE_LIMIT_TIERS"] = "free:20,bad_entry,premium:abc,standard:100"
+        parsed = _rl._parse_tiers()
+        assert parsed.get("free") == 20
+        assert parsed.get("standard") == 100
+        assert "bad_entry" not in parsed
+        assert "premium" not in parsed
+    finally:
+        if original_env is None:
+            os.environ.pop("RATE_LIMIT_TIERS", None)
+        else:
+            os.environ["RATE_LIMIT_TIERS"] = original_env
+
+
+def test_parse_tiers_trims_whitespace():
+    """_parse_tiers handles whitespace around tier names and limits."""
+    import app.rate_limiter as _rl
+    original_env = os.environ.get("RATE_LIMIT_TIERS")
+    try:
+        os.environ["RATE_LIMIT_TIERS"] = " free : 20 , standard : 100 "
+        parsed = _rl._parse_tiers()
+        assert parsed.get("free") == 20
+        assert parsed.get("standard") == 100
+    finally:
+        if original_env is None:
+            os.environ.pop("RATE_LIMIT_TIERS", None)
+        else:
+            os.environ["RATE_LIMIT_TIERS"] = original_env
+
+
+def test_rpm_for_tier_returns_configured_limit():
+    """_rpm_for_tier returns the RPM configured in _TIERS for a known tier."""
+    import app.rate_limiter as _rl
+    original = dict(_rl._TIERS)
+    try:
+        _rl._TIERS.clear()
+        _rl._TIERS.update({"enterprise": 1000, "standard": 200})
+        assert _rl._rpm_for_tier("enterprise") == 1000
+        assert _rl._rpm_for_tier("standard") == 200
+    finally:
+        _rl._TIERS.clear()
+        _rl._TIERS.update(original)
+
+
+def test_rpm_for_tier_unknown_falls_back_to_default():
+    """_rpm_for_tier falls back to _DEFAULT_RPM for a tier not in _TIERS."""
+    import app.rate_limiter as _rl
+    original = dict(_rl._TIERS)
+    try:
+        _rl._TIERS.clear()
+        _rl._TIERS.update({"free": 20})
+        assert _rl._rpm_for_tier("unknown_tier") == _rl._DEFAULT_RPM
+        assert _rl._rpm_for_tier("") == _rl._DEFAULT_RPM
+    finally:
+        _rl._TIERS.clear()
+        _rl._TIERS.update(original)
+
+
+def test_tiers_endpoint_reflects_configured_tiers():
+    """GET /tiers returns the tiers currently registered in _TIERS."""
+    import app.rate_limiter as _rl
+    original = dict(_rl._TIERS)
+    try:
+        _rl._TIERS.clear()
+        _rl._TIERS.update({"free": 30, "pro": 300})
+        r = client.get("/tiers")
+        assert r.status_code == 200
+        data = r.json()
+        assert "tiers" in data
+        assert data["tiers"]["free"] == 30
+        assert data["tiers"]["pro"] == 300
+    finally:
+        _rl._TIERS.clear()
+        _rl._TIERS.update(original)
+
+
+def test_tiers_endpoint_falls_back_when_no_tiers_configured():
+    """GET /tiers returns a default entry when _TIERS is empty."""
+    import app.rate_limiter as _rl
+    original = dict(_rl._TIERS)
+    try:
+        _rl._TIERS.clear()
+        r = client.get("/tiers")
+        assert r.status_code == 200
+        data = r.json()
+        assert "tiers" in data
+        assert "default_tier" in data
+        tiers = data["tiers"]
+        assert len(tiers) > 0
+        assert next(iter(tiers.values())) == _rl._DEFAULT_RPM
+    finally:
+        _rl._TIERS.clear()
+        _rl._TIERS.update(original)
+
+
+def test_tiers_endpoint_default_tier_reflects_module_constant():
+    """GET /tiers default_tier matches the _DEFAULT_TIER module constant."""
+    import app.rate_limiter as _rl
+    r = client.get("/tiers")
+    assert r.status_code == 200
+    assert r.json()["default_tier"] == _rl._DEFAULT_TIER
