@@ -251,9 +251,10 @@ def audit_stats(db: Session = Depends(get_db)):
     total = len(logs)
     blocked = sum(1 for l in logs if l.blocked)
     flagged = sum(1 for l in logs if l.flags)
+    timed_logs = [l for l in logs if l.latency_ms is not None]
     avg_latency = round(
-        sum(l.latency_ms for l in logs if l.latency_ms) / total, 2
-    )
+        sum(l.latency_ms for l in timed_logs) / len(timed_logs), 2
+    ) if timed_logs else 0.0
     flag_types: dict[str, int] = {}
     for l in logs:
         for f in (l.flags or []):
